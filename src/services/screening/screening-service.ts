@@ -121,6 +121,42 @@ export interface ScreenNameResult {
   totalAvailableBasis: CountBasis;
 }
 
+/** Options for {@link ScreeningService.searchIdentifier}. */
+export interface SearchIdentifierOptions {
+  entityType: EntityType | 'any';
+  /** Restrict to identifier types containing this text, folded case-insensitively. */
+  identifierType?: string;
+  limit: number;
+  /** Zero-based index of the first hit to return; defaults to 0. */
+  offset?: number;
+  query: string;
+  sources: SourceCode[];
+}
+
+/** One identifier search hit with enough provenance to drill into the designation. */
+export interface IdentifierSearchHit {
+  designationDate?: string;
+  designationId: string;
+  entityType: EntityType;
+  identifier: {
+    country?: string;
+    type: string;
+    value: string;
+  };
+  matchType: 'exact' | 'contains';
+  primaryName: string;
+  program?: string;
+  source: SourceCode;
+  sourceEntryId: string;
+}
+
+/** Result of an identifier search pass. */
+export interface SearchIdentifierResult {
+  hits: IdentifierSearchHit[];
+  normalizedQuery: string;
+  totalAvailable: number;
+}
+
 /** Options for {@link ScreeningService.resolveEntity}. */
 export interface ResolveEntityOptions {
   jurisdiction?: string;
@@ -217,6 +253,36 @@ interface BoundedScan<T> {
   /** True when the raw scan hit its row cap, making `results` an incomplete set. */
   capped: boolean;
   results: T[];
+}
+
+/** Append deferred identifiers without duplicating already-persisted source values. */
+function mergePayloadDetails(
+  payload: DesignationPayload,
+  details: Pick<DesignationPayload, 'addresses' | 'identifiers'>,
+): string {
+  const seenIdentifiers = new Set(
+    payload.identifiers.map((id) => `${id.type}\0${id.value}\0${id.country ?? ''}`),
+  );
+  const identifiers = [...payload.identifiers];
+  for (const identifier of details.identifiers) {
+    const key = `${identifier.type}\0${identifier.value}\0${identifier.country ?? ''}`;
+    if (seenIdentifiers.has(key)) continue;
+    seenIdentifiers.add(key);
+    identifiers.push(identifier);
+  }
+
+  const seenAddresses = new Set(
+    payload.addresses.map((address) => `${address.full}\0${address.country ?? ''}`),
+  );
+  const addresses = [...payload.addresses];
+  for (const address of details.addresses) {
+    const key = `${address.full}\0${address.country ?? ''}`;
+    if (seenAddresses.has(key)) continue;
+    seenAddresses.add(key);
+    addresses.push(address);
+  }
+
+  return JSON.stringify({ ...payload, addresses, identifiers });
 }
 
 /**
@@ -384,12 +450,24 @@ export class ScreeningService {
     if (fields.size === 0) return;
     const handle = await this.designationHandle();
     handle.transaction(() => {
+      const select = handle.prepare<{ payload: string }>(
+        `SELECT payload FROM designation WHERE source = ? AND source_entry_id = ?`,
+      );
       const update = handle.prepare(
-        `UPDATE designation SET program = ?, designation_date = ?
+        `UPDATE designation SET program = COALESCE(?, program), designation_date = COALESCE(?, designation_date), payload = ?
          WHERE source = ? AND source_entry_id = ?`,
       );
       for (const [entryId, value] of fields) {
-        update.run(value.program ?? null, value.designationDate ?? null, source, entryId);
+        const row = select.get(source, entryId);
+        if (!row) continue;
+        const payload =
+          value.identifiers?.length || value.addresses?.length
+            ? mergePayloadDetails(JSON.parse(row.payload) as DesignationPayload, {
+              addresses: value.addresses ?? [],
+              identifiers: value.identifiers ?? [],
+            })
+            : row.payload;
+        update.run(value.program ?? null, value.designationDate ?? null, payload, source, entryId);
       }
     });
   }
@@ -422,7 +500,7 @@ export class ScreeningService {
     handle.transaction(() => {
       handle.exec(`DELETE FROM ${NAME_TABLE}`);
       let cursor = '';
-      for (;;) {
+      for (; ;) {
         const rows = slice.all(cursor);
         if (rows.length === 0) return;
         for (const row of rows) {
@@ -926,6 +1004,77 @@ export class ScreeningService {
     };
   }
 
+  // ─── Identifier search ───────────────────────────────────────────────────
+
+  /** Search published identifiers such as IMO, tax IDs, passports, and registrations. */
+  async searchIdentifier(opts: SearchIdentifierOptions): Promise<SearchIdentifierResult> {
+    const normalizedQuery = fold(opts.query);
+    const normalizedType = opts.identifierType ? fold(opts.identifierType) : undefined;
+    const offset = opts.offset ?? 0;
+    const handle = await this.designationHandle();
+    const sourceFilter = this.sourceFilterClause(opts.sources);
+    const typeFilter =
+      opts.entityType === 'any'
+        ? ''
+        : ` AND d.entity_type = '${this.escapeLiteral(opts.entityType)}'`;
+
+    if (!normalizedQuery) return { hits: [], normalizedQuery, totalAvailable: 0 };
+
+    const rows = handle
+      .prepare<{
+        designation_date: string | null;
+        entity_type: string;
+        id: string;
+        payload: string;
+        primary_name: string;
+        program: string | null;
+        source: string;
+        source_entry_id: string;
+      }>(
+        `SELECT d.id, d.source, d.source_entry_id, d.entity_type, d.primary_name,
+                d.program, d.designation_date, d.payload
+         FROM designation d
+         WHERE 1 = 1${sourceFilter}${typeFilter}
+         ORDER BY d.id`,
+      )
+      .all();
+
+    const hits: IdentifierSearchHit[] = [];
+    for (const row of rows) {
+      const payload = JSON.parse(row.payload) as DesignationPayload;
+      for (const identifier of payload.identifiers) {
+        const value = fold(identifier.value);
+        const identifierType = fold(identifier.type);
+        if (normalizedType && !identifierType.includes(normalizedType)) continue;
+        if (value !== normalizedQuery && !value.includes(normalizedQuery)) continue;
+        hits.push({
+          designationId: row.id,
+          source: row.source as SourceCode,
+          sourceEntryId: row.source_entry_id,
+          entityType: row.entity_type as EntityType,
+          primaryName: row.primary_name,
+          identifier,
+          matchType: value === normalizedQuery ? 'exact' : 'contains',
+          ...(row.program ? { program: row.program } : {}),
+          ...(row.designation_date ? { designationDate: row.designation_date } : {}),
+        });
+      }
+    }
+
+    hits.sort(
+      (a, b) =>
+        identifierMatchRank(b.matchType) - identifierMatchRank(a.matchType) ||
+        a.designationId.localeCompare(b.designationId) ||
+        a.identifier.type.localeCompare(b.identifier.type) ||
+        a.identifier.value.localeCompare(b.identifier.value),
+    );
+    return {
+      hits: hits.slice(offset, offset + opts.limit),
+      normalizedQuery,
+      totalAvailable: hits.length,
+    };
+  }
+
   // ─── Designation detail ────────────────────────────────────────────────────
 
   /** Full normalized designation by source + entry id, or null if absent. */
@@ -1245,6 +1394,11 @@ export class ScreeningService {
 /** Rank for sorting match types (exact > strong > approximate). */
 function matchRank(type: ScreeningHit['matchType']): number {
   return type === 'exact' ? 3 : type === 'strong' ? 2 : 1;
+}
+
+/** Rank for sorting identifier match types (exact > contains). */
+function identifierMatchRank(type: IdentifierSearchHit['matchType']): number {
+  return type === 'exact' ? 2 : 1;
 }
 
 /**

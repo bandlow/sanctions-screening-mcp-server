@@ -58,10 +58,14 @@ import { decodeUtf8Stream, scanRecordFragments } from '@/services/screening/xml-
  * mirror; see the OFAC deferred join in this module's overview. Empty for every
  * source whose document is a flat repeating sequence.
  */
-export type DeferredDesignationFields = ReadonlyMap<
-  string,
-  { designationDate?: string; program?: string }
->;
+interface DeferredDesignationField {
+  addresses?: AddressRecord[];
+  designationDate?: string;
+  identifiers?: IdentifierRecord[];
+  program?: string;
+}
+
+export type DeferredDesignationFields = ReadonlyMap<string, DeferredDesignationField>;
 
 /** What one source's harvest accepted and dropped. */
 export interface SourceHarvestReport {
@@ -212,7 +216,7 @@ async function* replayTextStream(
  */
 export interface HarvestState {
   /** Columns to apply once the source's rows have landed. Only OFAC fills this. */
-  deferredFields: Map<string, { designationDate?: string; program?: string }>;
+  deferredFields: Map<string, DeferredDesignationField>;
   rejections: IngestRejections;
 }
 
@@ -287,7 +291,9 @@ function buildStreamingIngester(spec: StreamingSourceSpec): SanctionsIngester {
  */
 const OFAC_RECORD_TAGS = [
   'ReferenceValueSets',
+  'Location',
   'DistinctParty',
+  'IDRegDocument',
   'SanctionsEntry',
   'sdnEntry',
 ] as const;
@@ -312,20 +318,73 @@ export async function* streamOfacFromText(
   state: HarvestState,
 ): AsyncGenerator<NormalizedDesignation> {
   let refs = emptyOfacReferenceSets();
+  const locationById = new Map<string, AddressRecord>();
+  const identityToParty = new Map<string, string>();
+  const pendingAddressLinksByLocation = new Map<string, string[]>();
+  const pendingIdentifiersByIdentity = new Map<string, IdentifierRecord[]>();
   for await (const fragment of scanRecordFragments(textChunks, OFAC_RECORD_TAGS)) {
     const body = recordBody(parseXml<Record<string, unknown>>(fragment.xml), fragment.name);
     if (fragment.name === 'ReferenceValueSets') {
       refs = buildOfacReferenceSets(body);
       continue;
     }
+    if (fragment.name === 'Location') {
+      const location = parseOfacLocation(body, refs);
+      if (location) {
+        locationById.set(location.id, location.address);
+        for (const partyId of pendingAddressLinksByLocation.get(location.id) ?? []) {
+          appendOfacDeferredAddresses(state.deferredFields, partyId, [location.address]);
+        }
+        pendingAddressLinksByLocation.delete(location.id);
+      }
+      continue;
+    }
+    if (fragment.name === 'IDRegDocument') {
+      foldOfacIdRegDocument(
+        body,
+        refs,
+        identityToParty,
+        state.deferredFields,
+        pendingIdentifiersByIdentity,
+      );
+      continue;
+    }
     if (fragment.name === 'SanctionsEntry') {
       foldOfacSanctionsEntry(body, state.deferredFields);
       continue;
     }
+    if (fragment.name === 'DistinctParty') {
+      const linkedIdentities = foldOfacIdentityPartyLinks(body, identityToParty);
+      const partyId = asText(body['@_FixedRef']) ?? asText(body['@_ID']);
+      if (partyId) {
+        foldOfacLocationFeatures(
+          body,
+          refs,
+          locationById,
+          state.deferredFields,
+          pendingAddressLinksByLocation,
+        );
+      }
+      for (const identityId of linkedIdentities) {
+        const partyId = identityToParty.get(identityId);
+        const identifiers = pendingIdentifiersByIdentity.get(identityId);
+        if (!partyId || !identifiers?.length) continue;
+        appendOfacDeferredIdentifiers(state.deferredFields, partyId, identifiers);
+        pendingIdentifiersByIdentity.delete(identityId);
+      }
+    }
     const record =
       fragment.name === 'sdnEntry'
         ? parseOfacStandard(body, source, state.rejections)
-        : parseOfacAdvanced(body, source, refs, EMPTY_PROGRAM_INDEX, state.rejections);
+        : parseOfacAdvanced(
+          body,
+          source,
+          refs,
+          EMPTY_PROGRAM_INDEX,
+          new Map(),
+          new Map(),
+          state.rejections,
+        );
     if (record) yield record;
   }
 }
@@ -366,9 +425,22 @@ export function parseOfac(
   );
   const programsByProfile = buildOfacProgramIndex(sanctions);
   const parties = sanctions.DistinctParties as Record<string, unknown> | undefined;
-  return asArray(parties?.DistinctParty as unknown)
+  const partyRecords = asArray(parties?.DistinctParty as unknown) as Record<string, unknown>[];
+  const identityToParty = buildOfacIdentityPartyIndex(partyRecords);
+  const locationById = buildOfacLocationIndex(sanctions, refs);
+  const addressesByProfile = buildOfacAddressIndex(partyRecords, refs, locationById);
+  const identifiersByProfile = buildOfacIdRegDocumentIndex(sanctions, refs, identityToParty);
+  return partyRecords
     .map((p) =>
-      parseOfacAdvanced(p as Record<string, unknown>, source, refs, programsByProfile, rejections),
+      parseOfacAdvanced(
+        p,
+        source,
+        refs,
+        programsByProfile,
+        identifiersByProfile,
+        addressesByProfile,
+        rejections,
+      ),
     )
     .filter(Boolean) as NormalizedDesignation[];
 }
@@ -381,8 +453,14 @@ export function parseOfac(
 interface OfacReferenceSets {
   /** AliasType ID → label (1400 = A.K.A., 1401 = F.K.A., …). */
   aliasType: Map<string, string>;
+  /** Country ID → label. */
+  country: Map<string, string>;
   /** FeatureType ID → label (8 = Birthdate, 9 = Place of Birth, …). */
   featureType: Map<string, string>;
+  /** IDRegDocType ID → label (1626 = Vessel Registration Identification, …). */
+  idRegDocType: Map<string, string>;
+  /** LocPartType ID → label (1451 = ADDRESS1, 1454 = CITY, …). */
+  locPartType: Map<string, string>;
   /** PartySubType ID → label (Vessel / Aircraft / Unknown). */
   subTypeLabel: Map<string, string>;
   /** PartySubType ID → its PartyType ID (1 = Individual, 2 = Entity, 4 = Transport). */
@@ -393,7 +471,10 @@ interface OfacReferenceSets {
 function emptyOfacReferenceSets(): OfacReferenceSets {
   return {
     aliasType: new Map(),
+    country: new Map(),
     featureType: new Map(),
+    idRegDocType: new Map(),
+    locPartType: new Map(),
     subTypeToPartyType: new Map(),
     subTypeLabel: new Map(),
   };
@@ -423,6 +504,30 @@ function buildOfacReferenceSets(sets: Record<string, unknown>): OfacReferenceSet
     const label = asText((f as Record<string, unknown>)['#text'] ?? f);
     if (id && label) featureType.set(id, label);
   }
+  const idRegDocType = new Map<string, string>();
+  for (const d of asArray(
+    (sets.IDRegDocTypeValues as Record<string, unknown> | undefined)?.IDRegDocType as unknown,
+  )) {
+    const id = asText((d as Record<string, unknown>)['@_ID']);
+    const label = asText((d as Record<string, unknown>)['#text'] ?? d);
+    if (id && label) idRegDocType.set(id, label);
+  }
+  const locPartType = new Map<string, string>();
+  for (const p of asArray(
+    (sets.LocPartTypeValues as Record<string, unknown> | undefined)?.LocPartType as unknown,
+  )) {
+    const id = asText((p as Record<string, unknown>)['@_ID']);
+    const label = asText((p as Record<string, unknown>)['#text'] ?? p);
+    if (id && label) locPartType.set(id, label);
+  }
+  const country = new Map<string, string>();
+  for (const c of asArray(
+    (sets.CountryValues as Record<string, unknown> | undefined)?.Country as unknown,
+  )) {
+    const id = asText((c as Record<string, unknown>)['@_ID']);
+    const label = asText((c as Record<string, unknown>)['#text'] ?? c);
+    if (id && label) country.set(id, label);
+  }
   const subTypeToPartyType = new Map<string, string>();
   const subTypeLabel = new Map<string, string>();
   for (const s of asArray(
@@ -436,7 +541,15 @@ function buildOfacReferenceSets(sets: Record<string, unknown>): OfacReferenceSet
     const label = asText(sub['#text'] ?? sub);
     if (label) subTypeLabel.set(id, label);
   }
-  return { aliasType, featureType, subTypeToPartyType, subTypeLabel };
+  return {
+    aliasType,
+    country,
+    featureType,
+    idRegDocType,
+    locPartType,
+    subTypeToPartyType,
+    subTypeLabel,
+  };
 }
 
 /**
@@ -448,8 +561,8 @@ function buildOfacReferenceSets(sets: Record<string, unknown>): OfacReferenceSet
  */
 function buildOfacProgramIndex(
   sanctions: Record<string, unknown>,
-): Map<string, { designationDate?: string; program?: string }> {
-  const out = new Map<string, { designationDate?: string; program?: string }>();
+): Map<string, DeferredDesignationField> {
+  const out = new Map<string, DeferredDesignationField>();
   const entries = (sanctions.SanctionsEntries ?? {}) as Record<string, unknown>;
   for (const raw of asArray(entries.SanctionsEntry as unknown)) {
     foldOfacSanctionsEntry(raw as Record<string, unknown>, out);
@@ -466,7 +579,7 @@ function buildOfacProgramIndex(
  */
 function foldOfacSanctionsEntry(
   entry: Record<string, unknown>,
-  index: Map<string, { designationDate?: string; program?: string }>,
+  index: Map<string, DeferredDesignationField>,
 ): void {
   const profileId = asText(entry['@_ProfileID']);
   if (!profileId) return;
@@ -480,6 +593,225 @@ function foldOfacSanctionsEntry(
     ...existing,
     ...(programs.length ? { program: programs.join(', ') } : {}),
     ...(designationDate ? { designationDate } : {}),
+  });
+}
+
+/** Build IdentityID → profile id links from already-parsed advanced OFAC parties. */
+function buildOfacIdentityPartyIndex(parties: Record<string, unknown>[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const party of parties) foldOfacIdentityPartyLinks(party, out);
+  return out;
+}
+
+/** Add one party's identity ids to the deferred ID-document join index. */
+function foldOfacIdentityPartyLinks(
+  party: Record<string, unknown>,
+  index: Map<string, string>,
+): string[] {
+  const partyId = asText(party['@_FixedRef']) ?? asText(party['@_ID']);
+  if (!partyId) return [];
+  const profile = (party.Profile ?? party.profile) as Record<string, unknown> | undefined;
+  const linked: string[] = [];
+  for (const ident of asArray((profile?.Identity ?? profile?.identity) as unknown)) {
+    const identityId = asText((ident as Record<string, unknown>)['@_ID']);
+    if (!identityId) continue;
+    index.set(identityId, partyId);
+    linked.push(identityId);
+  }
+  return linked;
+}
+
+/** Build profile id → ID document records from OFAC's separate IDRegDocuments block. */
+function buildOfacIdRegDocumentIndex(
+  sanctions: Record<string, unknown>,
+  refs: OfacReferenceSets,
+  identityToParty: ReadonlyMap<string, string>,
+): Map<string, DeferredDesignationField> {
+  const out = new Map<string, DeferredDesignationField>();
+  const docs = (sanctions.IDRegDocuments ?? {}) as Record<string, unknown>;
+  for (const raw of asArray(docs.IDRegDocument as unknown)) {
+    foldOfacIdRegDocument(raw as Record<string, unknown>, refs, identityToParty, out);
+  }
+  return out;
+}
+
+/** Fold one OFAC ID registration document into the owning party's deferred fields. */
+function foldOfacIdRegDocument(
+  doc: Record<string, unknown>,
+  refs: OfacReferenceSets,
+  identityToParty: ReadonlyMap<string, string>,
+  index: Map<string, DeferredDesignationField>,
+  pendingByIdentity?: Map<string, IdentifierRecord[]>,
+): void {
+  const parsed = parseOfacIdRegDocument(doc, refs);
+  if (!parsed) return;
+  const partyId = identityToParty.get(parsed.identityId);
+  if (!partyId) {
+    if (pendingByIdentity) {
+      pendingByIdentity.set(parsed.identityId, [
+        ...(pendingByIdentity.get(parsed.identityId) ?? []),
+        parsed.identifier,
+      ]);
+    }
+    return;
+  }
+  appendOfacDeferredIdentifiers(index, partyId, [parsed.identifier]);
+}
+
+/** Parse the usable parts of an OFAC ID registration document. */
+function parseOfacIdRegDocument(
+  doc: Record<string, unknown>,
+  refs: OfacReferenceSets,
+): { identifier: IdentifierRecord; identityId: string } | undefined {
+  const identityId = asText(doc['@_IdentityID']);
+  const value = asText(doc.IDRegistrationNo);
+  if (!identityId || !value) return;
+  return {
+    identityId,
+    identifier: {
+      type: refs.idRegDocType.get(asText(doc['@_IDRegDocTypeID']) ?? '') ?? 'ID',
+      value,
+    },
+  };
+}
+
+/** Append identifiers to one deferred party entry. */
+function appendOfacDeferredIdentifiers(
+  index: Map<string, DeferredDesignationField>,
+  partyId: string,
+  identifiers: IdentifierRecord[],
+): void {
+  const existing = index.get(partyId) ?? {};
+  index.set(partyId, {
+    ...existing,
+    identifiers: [...(existing.identifiers ?? []), ...identifiers],
+  });
+}
+
+/** Build LocationID → address records from OFAC's separate Locations block. */
+function buildOfacLocationIndex(
+  sanctions: Record<string, unknown>,
+  refs: OfacReferenceSets,
+): Map<string, AddressRecord> {
+  const out = new Map<string, AddressRecord>();
+  const locations = (sanctions.Locations ?? {}) as Record<string, unknown>;
+  for (const raw of asArray(locations.Location as unknown)) {
+    const location = parseOfacLocation(raw as Record<string, unknown>, refs);
+    if (location) out.set(location.id, location.address);
+  }
+  return out;
+}
+
+/** Build profile id → addresses by following Location feature references. */
+function buildOfacAddressIndex(
+  parties: Record<string, unknown>[],
+  refs: OfacReferenceSets,
+  locationById: ReadonlyMap<string, AddressRecord>,
+): Map<string, DeferredDesignationField> {
+  const out = new Map<string, DeferredDesignationField>();
+  for (const party of parties) {
+    foldOfacLocationFeatures(party, refs, locationById, out);
+  }
+  return out;
+}
+
+/** Fold Location features from one party into deferred address payload fields. */
+function foldOfacLocationFeatures(
+  party: Record<string, unknown>,
+  refs: OfacReferenceSets,
+  locationById: ReadonlyMap<string, AddressRecord>,
+  index: Map<string, DeferredDesignationField>,
+  pendingByLocation?: Map<string, string[]>,
+): void {
+  const partyId = asText(party['@_FixedRef']) ?? asText(party['@_ID']);
+  if (!partyId) return;
+  const profile = (party.Profile ?? party.profile) as Record<string, unknown> | undefined;
+  for (const locationId of ofacFeatureLocationIds(profile, refs)) {
+    const address = locationById.get(locationId);
+    if (address) {
+      appendOfacDeferredAddresses(index, partyId, [address]);
+    } else if (pendingByLocation) {
+      pendingByLocation.set(locationId, [...(pendingByLocation.get(locationId) ?? []), partyId]);
+    }
+  }
+}
+
+/** LocationIDs referenced by a profile's Location features. */
+function ofacFeatureLocationIds(
+  profile: Record<string, unknown> | undefined,
+  refs: OfacReferenceSets,
+): string[] {
+  const ids: string[] = [];
+  for (const featRaw of asArray(profile?.Feature as unknown)) {
+    const feat = featRaw as Record<string, unknown>;
+    const label = refs.featureType.get(asText(feat['@_FeatureTypeID']) ?? '')?.toLowerCase();
+    if (label !== 'location') continue;
+    for (const version of ofacFeatureVersions(feat)) {
+      const versionLocation = version.VersionLocation as Record<string, unknown> | undefined;
+      const id = asText(versionLocation?.['@_LocationID']);
+      if (id) ids.push(id);
+    }
+  }
+  return ids;
+}
+
+/** Parse one OFAC Location into the normalized address shape. */
+function parseOfacLocation(
+  location: Record<string, unknown>,
+  refs: OfacReferenceSets,
+): { address: AddressRecord; id: string } | undefined {
+  const id = asText(location['@_ID']);
+  if (!id) return;
+  const countryId = asText(
+    (location.LocationCountry as Record<string, unknown> | undefined)?.['@_CountryID'],
+  );
+  const country = countryId ? refs.country.get(countryId) : undefined;
+  const parts = [...ofacLocationParts(location, refs), country].filter((part): part is string =>
+    Boolean(part),
+  );
+  if (parts.length === 0) return;
+  return {
+    id,
+    address: {
+      full: parts.join(', '),
+      ...opt('country', country),
+    },
+  };
+}
+
+/** Extract ordered text parts from one OFAC Location. */
+function ofacLocationParts(location: Record<string, unknown>, refs: OfacReferenceSets): string[] {
+  const preferredOrder = [
+    'ADDRESS1',
+    'ADDRESS2',
+    'ADDRESS3',
+    'CITY',
+    'STATE/PROVINCE',
+    'POSTAL CODE',
+  ];
+  const byType = new Map<string, string[]>();
+  for (const raw of asArray(location.LocationPart as unknown)) {
+    const part = raw as Record<string, unknown>;
+    const type = refs.locPartType.get(asText(part['@_LocPartTypeID']) ?? '');
+    if (!type) continue;
+    const values = asArray(part.LocationPartValue as unknown)
+      .map((value) => asText((value as Record<string, unknown>).Value))
+      .filter((value): value is string => Boolean(value));
+    byType.set(type, [...(byType.get(type) ?? []), ...values]);
+  }
+  return preferredOrder.flatMap((type) => byType.get(type) ?? []);
+}
+
+/** Append addresses to one deferred party entry. */
+function appendOfacDeferredAddresses(
+  index: Map<string, DeferredDesignationField>,
+  partyId: string,
+  addresses: AddressRecord[],
+): void {
+  const existing = index.get(partyId) ?? {};
+  index.set(partyId, {
+    ...existing,
+    addresses: [...(existing.addresses ?? []), ...addresses],
   });
 }
 
@@ -623,6 +955,8 @@ function parseOfacAdvanced(
   source: SourceCode,
   refs: OfacReferenceSets,
   programsByProfile: DeferredDesignationFields,
+  identifiersByProfile: ReadonlyMap<string, { identifiers?: IdentifierRecord[] }>,
+  addressesByProfile: ReadonlyMap<string, { addresses?: AddressRecord[] }>,
   rejections: IngestRejections,
 ): NormalizedDesignation | null {
   const profile = (p.Profile ?? p.profile) as Record<string, unknown> | undefined;
@@ -644,7 +978,7 @@ function parseOfacAdvanced(
           .map((np) =>
             asText(
               ((np as Record<string, unknown>).NamePartValue as Record<string, unknown>)?.[
-                '#text'
+              '#text'
               ] ?? (np as Record<string, unknown>).NamePartValue,
             ),
           )
@@ -671,7 +1005,13 @@ function parseOfacAdvanced(
     .filter((n) => n !== primaryEntry)
     .map((n) => ({ name: n.name, nameType: n.nameType }));
 
-  const { datesOfBirth, placesOfBirth } = extractOfacFeatures(profile, refs);
+  const {
+    datesOfBirth,
+    identifiers: featureIdentifiers,
+    placesOfBirth,
+  } = extractOfacFeatures(profile, refs);
+  const identifiers = [...featureIdentifiers, ...(identifiersByProfile.get(id)?.identifiers ?? [])];
+  const addresses = addressesByProfile.get(id)?.addresses ?? [];
   const program = programsByProfile.get(id);
 
   return {
@@ -684,8 +1024,8 @@ function parseOfacAdvanced(
     ...(program?.designationDate ? { designationDate: program.designationDate } : {}),
     payload: {
       aliases,
-      identifiers: [],
-      addresses: [],
+      identifiers,
+      addresses,
       datesOfBirth:
         datesOfBirth.length || placesOfBirth.length ? mergeDobPob(datesOfBirth, placesOfBirth) : [],
       nationalities: [],
@@ -723,37 +1063,63 @@ function mapOfacPartySubType(subTypeId: string | undefined, refs: OfacReferenceS
   return 'unknown';
 }
 
-/** Birthdate / place-of-birth feature values pulled from a profile's `<Feature>`s. */
+/** Birthdate / place-of-birth / identifier values pulled from a profile's `<Feature>`s. */
 function extractOfacFeatures(
   profile: Record<string, unknown> | undefined,
   refs: OfacReferenceSets,
-): { datesOfBirth: string[]; placesOfBirth: string[] } {
+): { datesOfBirth: string[]; identifiers: IdentifierRecord[]; placesOfBirth: string[] } {
   const datesOfBirth: string[] = [];
+  const identifiers: IdentifierRecord[] = [];
   const placesOfBirth: string[] = [];
   for (const featRaw of asArray(profile?.Feature as unknown)) {
     const feat = featRaw as Record<string, unknown>;
-    const label = refs.featureType.get(asText(feat['@_FeatureTypeID']) ?? '')?.toLowerCase();
-    if (label === 'birthdate') {
+    const label = refs.featureType.get(asText(feat['@_FeatureTypeID']) ?? '');
+    const normalizedLabel = label?.toLowerCase();
+    if (normalizedLabel === 'birthdate') {
       const date = ofacFeatureDate(feat);
       if (date) datesOfBirth.push(date);
-    } else if (label === 'place of birth') {
-      const place = asText(
-        (feat.FeatureVersion as Record<string, unknown> | undefined)?.VersionLocation,
-      );
+    } else if (normalizedLabel === 'place of birth') {
+      const place = asText(ofacFeatureVersions(feat)[0]?.VersionLocation);
       // Place often lives as free text in the VersionDetail; capture what's there.
-      const detail = asText(
-        (
-          (feat.FeatureVersion as Record<string, unknown> | undefined)?.VersionDetail as Record<
-            string,
-            unknown
-          >
-        )?.['#text'] ?? (feat.FeatureVersion as Record<string, unknown> | undefined)?.VersionDetail,
-      );
+      const detail = ofacFeatureDetail(feat);
       const pob = detail ?? place;
       if (pob) placesOfBirth.push(pob);
+    } else if (label && isOfacIdentifierFeature(label)) {
+      for (const detail of ofacFeatureDetails(feat)) {
+        identifiers.push({ type: label, value: detail });
+      }
     }
   }
-  return { datesOfBirth, placesOfBirth };
+  return { datesOfBirth, identifiers, placesOfBirth };
+}
+
+/** OFAC feature versions can be a single object or an array-of-one/many. */
+function ofacFeatureVersions(feat: Record<string, unknown>): Record<string, unknown>[] {
+  return asArray(feat.FeatureVersion as unknown).map(
+    (version) => version as Record<string, unknown>,
+  );
+}
+
+/** Pull all free-text details published under a feature's versions. */
+function ofacFeatureDetails(feat: Record<string, unknown>): string[] {
+  return ofacFeatureVersions(feat)
+    .map((version) =>
+      asText(
+        (version.VersionDetail as Record<string, unknown>)?.['#text'] ?? version.VersionDetail,
+      ),
+    )
+    .filter((detail): detail is string => Boolean(detail));
+}
+
+/** Pull the first free-text feature detail, for singleton feature types. */
+function ofacFeatureDetail(feat: Record<string, unknown>): string | undefined {
+  return ofacFeatureDetails(feat)[0];
+}
+
+/** Feature labels that OFAC renders in the Details.aspx ID table. */
+function isOfacIdentifierFeature(label: string): boolean {
+  const normalizedLabel = label.toLowerCase();
+  return normalizedLabel.includes('identification') || normalizedLabel.includes('passport');
 }
 
 /** Pull an ISO-ish birthdate out of a `<Feature>`'s nested `DatePeriod`. */
@@ -928,9 +1294,9 @@ export function parseUk(
   const list = designations.length
     ? designations
     : asArray(
-        ((doc as Record<string, unknown>).Designations as Record<string, unknown> | undefined)
-          ?.Designation as unknown,
-      );
+      ((doc as Record<string, unknown>).Designations as Record<string, unknown> | undefined)
+        ?.Designation as unknown,
+    );
   return list
     .map((raw) => parseUkDesignation(raw as Record<string, unknown>, rejections))
     .filter(Boolean) as NormalizedDesignation[];
