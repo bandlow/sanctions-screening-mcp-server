@@ -254,15 +254,22 @@ curl.exe -i http://localhost:3010/mcp `
   -H "Content-Type: application/json" `
   -H "Accept: application/json, text/event-stream" `
   --data-raw '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"manual-client","version":"1.0"}}}'
+```
 
+Copy the `mcp-session-id` response header from this request. Use that value in
+the `Mcp-Session-Id` header of all subsequent requests in the same session:
+
+```powershell
 curl.exe http://localhost:3010/mcp `
   -H "Content-Type: application/json" `
   -H "Accept: application/json, text/event-stream" `
+  -H "Mcp-Session-Id: <the-session-id-from-initialize>" `
   --data-raw '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
 
 curl.exe http://localhost:3010/mcp `
   -H "Content-Type: application/json" `
   -H "Accept: application/json, text/event-stream" `
+  -H "Mcp-Session-Id: <the-session-id-from-initialize>" `
   --data-raw '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sanctions_screen_name","arguments":{"name":"ACME Corporation"}}}'
 ```
 
