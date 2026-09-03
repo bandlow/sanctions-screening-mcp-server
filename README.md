@@ -245,6 +245,27 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 # Server listens at http://localhost:3010/mcp
 ```
 
+### REST facade for SAP/CAP
+
+When running in HTTP mode, the server also exposes a REST facade on
+`MCP_HTTP_PORT + 1` at host `MCP_HTTP_HOST` for classical backend integration.
+
+With the example above (`MCP_HTTP_PORT=3010`), REST is available at
+`http://localhost:3011/api/v1`.
+
+Implemented endpoints:
+
+- `POST /api/v1/screening/business-partner` - screen one business partner name
+- `GET /api/v1/sources` - mirror readiness, freshness, and source provenance
+
+Example:
+
+```powershell
+curl.exe -X POST http://localhost:3011/api/v1/screening/business-partner `
+  -H "Content-Type: application/json" `
+  --data-raw '{"bpId":"1000001234","name":"ACME Trading LLC","role":"vendor","country":"DE","matchMode":"strict"}'
+```
+
 To call the endpoint manually, send the MCP `initialize` request first, followed
 by `tools/list` or `tools/call`. The following examples use PowerShell on
 Windows; use `curl.exe` rather than PowerShell's `curl` alias:

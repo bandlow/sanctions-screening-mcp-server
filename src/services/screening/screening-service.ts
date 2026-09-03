@@ -12,18 +12,22 @@
  * @module services/screening/screening-service
  */
 
-import type { Context } from '@cyanheads/mcp-ts-core';
-import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import type { Mirror, SqliteHandle, SyncPage } from '@cyanheads/mcp-ts-core/mirror';
-import { defineMirror, sqliteMirrorStore } from '@cyanheads/mcp-ts-core/mirror';
-import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
-import { logger, requestContextService } from '@cyanheads/mcp-ts-core/utils';
-import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
+import type { Context } from "@cyanheads/mcp-ts-core";
+import type { AppConfig } from "@cyanheads/mcp-ts-core/config";
+import type {
+  Mirror,
+  SqliteHandle,
+  SyncPage,
+} from "@cyanheads/mcp-ts-core/mirror";
+import { defineMirror, sqliteMirrorStore } from "@cyanheads/mcp-ts-core/mirror";
+import type { StorageService } from "@cyanheads/mcp-ts-core/storage";
+import { logger, requestContextService } from "@cyanheads/mcp-ts-core/utils";
+import { getServerConfig, type ServerConfig } from "@/config/server-config.js";
 import {
   createSanctionsSync,
   type DeferredDesignationFields,
   type SanctionsIngester,
-} from '@/services/screening/sanctions-ingest.js';
+} from "@/services/screening/sanctions-ingest.js";
 import {
   designationStoreSpec,
   ensureDesignationAuxSchema,
@@ -32,7 +36,7 @@ import {
   leiStoreSpec,
   NAME_FTS_TABLE,
   NAME_TABLE,
-} from '@/services/screening/schema.js';
+} from "@/services/screening/schema.js";
 import {
   bestTokenScore,
   buildFtsMatch,
@@ -42,7 +46,7 @@ import {
   lengthRatio,
   tokenCoverage,
   tokenize,
-} from '@/services/screening/text-matching.js';
+} from "@/services/screening/text-matching.js";
 import type {
   DesignationPayload,
   EntityType,
@@ -55,8 +59,10 @@ import type {
   QueryTokenCoverage,
   ScreeningHit,
   SourceCode,
-} from '@/services/screening/types.js';
-import { SOURCE_CODES } from '@/services/screening/types.js';
+} from "@/services/screening/types.js";
+import { SOURCE_CODES } from "@/services/screening/types.js";
+
+type ServiceLogContext = Pick<Context, "log">;
 
 /** A loaded source's provenance + freshness, surfaced by `sanctions_list_sources`. */
 export interface SourceStatus {
@@ -80,7 +86,7 @@ export interface MirrorReadiness {
  * can reach; `lower_bound` means a bounded scan produced it and more matches may
  * exist beyond what was scanned — never present a bound as a total.
  */
-export type CountBasis = 'exact' | 'lower_bound';
+export type CountBasis = "exact" | "lower_bound";
 
 /** Options for {@link ScreeningService.screenName}. */
 export interface ScreenNameOptions {
@@ -95,7 +101,7 @@ export interface ScreenNameOptions {
    * heavily flagged. There, no strict hit is the correct, honest answer.
    */
   autoFallback?: boolean;
-  entityType: EntityType | 'any';
+  entityType: EntityType | "any";
   limit: number;
   matchMode: MatchMode;
   /** Jaro-Winkler floor for fuzzy hits; defaults to config `fuzzyMinScore`. */
@@ -123,7 +129,7 @@ export interface ScreenNameResult {
 
 /** Options for {@link ScreeningService.searchIdentifier}. */
 export interface SearchIdentifierOptions {
-  entityType: EntityType | 'any';
+  entityType: EntityType | "any";
   /** Restrict to identifier types containing this text, folded case-insensitively. */
   identifierType?: string;
   limit: number;
@@ -143,7 +149,7 @@ export interface IdentifierSearchHit {
     type: string;
     value: string;
   };
-  matchType: 'exact' | 'contains';
+  matchType: "exact" | "contains";
   primaryName: string;
   program?: string;
   source: SourceCode;
@@ -166,7 +172,7 @@ export interface ResolveEntityOptions {
   /** Zero-based index of the first candidate to return; defaults to 0. */
   offset?: number;
   query: string;
-  status: 'any' | 'issued' | 'lapsed';
+  status: "any" | "issued" | "lapsed";
 }
 
 /** Result of an LEI resolution pass. */
@@ -258,25 +264,29 @@ interface BoundedScan<T> {
 /** Append deferred identifiers without duplicating already-persisted source values. */
 function mergePayloadDetails(
   payload: DesignationPayload,
-  details: Pick<DesignationPayload, 'addresses' | 'identifiers'>,
+  details: Pick<DesignationPayload, "addresses" | "identifiers">,
 ): string {
   const seenIdentifiers = new Set(
-    payload.identifiers.map((id) => `${id.type}\0${id.value}\0${id.country ?? ''}`),
+    payload.identifiers.map(
+      (id) => `${id.type}\0${id.value}\0${id.country ?? ""}`,
+    ),
   );
   const identifiers = [...payload.identifiers];
   for (const identifier of details.identifiers) {
-    const key = `${identifier.type}\0${identifier.value}\0${identifier.country ?? ''}`;
+    const key = `${identifier.type}\0${identifier.value}\0${identifier.country ?? ""}`;
     if (seenIdentifiers.has(key)) continue;
     seenIdentifiers.add(key);
     identifiers.push(identifier);
   }
 
   const seenAddresses = new Set(
-    payload.addresses.map((address) => `${address.full}\0${address.country ?? ''}`),
+    payload.addresses.map(
+      (address) => `${address.full}\0${address.country ?? ""}`,
+    ),
   );
   const addresses = [...payload.addresses];
   for (const address of details.addresses) {
-    const key = `${address.full}\0${address.country ?? ''}`;
+    const key = `${address.full}\0${address.country ?? ""}`;
     if (seenAddresses.has(key)) continue;
     seenAddresses.add(key);
     addresses.push(address);
@@ -303,18 +313,22 @@ export class ScreeningService {
     // applies deltas, and is far larger). The GLEIF file is a sibling of the
     // configured sanctions path.
     this.designationMirror = defineMirror({
-      name: 'sanctions-designations',
-      store: sqliteMirrorStore({ path: config.mirrorPath, ...designationStoreSpec }),
+      name: "sanctions-designations",
+      store: sqliteMirrorStore({
+        path: config.mirrorPath,
+        ...designationStoreSpec,
+      }),
       // The harvest streams, so a source's trailing columns (OFAC publishes its
       // programme block after every party) arrive after those rows are written —
       // the sync patches them through the service rather than re-stating rows.
       sync: createSanctionsSync({
-        applyDeferredFields: (source, fields) => this.applyDeferredFields(source, fields),
+        applyDeferredFields: (source, fields) =>
+          this.applyDeferredFields(source, fields),
         onSourceReport: (report) =>
           logger.info(
-            'Sanctions harvest — source complete',
+            "Sanctions harvest — source complete",
             requestContextService.createRequestContext({
-              operation: 'mirror.sync.source',
+              operation: "mirror.sync.source",
               additionalContext: {
                 source: report.source,
                 accepted: report.accepted,
@@ -327,8 +341,11 @@ export class ScreeningService {
     });
 
     this.leiMirror = defineMirror({
-      name: 'gleif-entities',
-      store: sqliteMirrorStore({ path: gleifPath(config.mirrorPath), ...leiStoreSpec }),
+      name: "gleif-entities",
+      store: sqliteMirrorStore({
+        path: gleifPath(config.mirrorPath),
+        ...leiStoreSpec,
+      }),
       // GLEIF ingest is driven directly via ingestLeiEntities/ingestLeiRelationships
       // (golden-copy init + delta refresh), so the mirror's own sync yields no
       // pages — the lifecycle scripts call the ingest methods.
@@ -387,7 +404,9 @@ export class ScreeningService {
    * rows via the mirror store, then refreshes the per-alias `name` index for
    * exactly those designations — all in one transaction. Idempotent per id.
    */
-  async ingestDesignations(designations: NormalizedDesignation[]): Promise<void> {
+  async ingestDesignations(
+    designations: NormalizedDesignation[],
+  ): Promise<void> {
     if (designations.length === 0) return;
     const handle = await this.designationHandle();
 
@@ -404,7 +423,9 @@ export class ScreeningService {
            legal_basis=excluded.legal_basis, designation_date=excluded.designation_date,
            payload=excluded.payload`,
       );
-      const deleteNames = handle.prepare(`DELETE FROM ${NAME_TABLE} WHERE designation_id = ?`);
+      const deleteNames = handle.prepare(
+        `DELETE FROM ${NAME_TABLE} WHERE designation_id = ?`,
+      );
       const insertName = handle.prepare(
         `INSERT INTO ${NAME_TABLE} (designation_id, name, normalized, phonetic, name_type)
          VALUES (?, ?, ?, ?, ?)`,
@@ -429,7 +450,13 @@ export class ScreeningService {
         for (const rec of this.allNames(d)) {
           const normalized = fold(rec.name);
           if (!normalized) continue;
-          insertName.run(d.id, rec.name, normalized, doubleMetaphone(normalized), rec.nameType);
+          insertName.run(
+            d.id,
+            rec.name,
+            normalized,
+            doubleMetaphone(normalized),
+            rec.nameType,
+          );
         }
       }
     });
@@ -446,7 +473,10 @@ export class ScreeningService {
    * a party the document never published, and inventing a row for it would put
    * an entity with no identity into the searchable corpus.
    */
-  async applyDeferredFields(source: SourceCode, fields: DeferredDesignationFields): Promise<void> {
+  async applyDeferredFields(
+    source: SourceCode,
+    fields: DeferredDesignationFields,
+  ): Promise<void> {
     if (fields.size === 0) return;
     const handle = await this.designationHandle();
     handle.transaction(() => {
@@ -462,12 +492,21 @@ export class ScreeningService {
         if (!row) continue;
         const payload =
           value.identifiers?.length || value.addresses?.length
-            ? mergePayloadDetails(JSON.parse(row.payload) as DesignationPayload, {
-              addresses: value.addresses ?? [],
-              identifiers: value.identifiers ?? [],
-            })
+            ? mergePayloadDetails(
+                JSON.parse(row.payload) as DesignationPayload,
+                {
+                  addresses: value.addresses ?? [],
+                  identifiers: value.identifiers ?? [],
+                },
+              )
             : row.payload;
-        update.run(value.program ?? null, value.designationDate ?? null, payload, source, entryId);
+        update.run(
+          value.program ?? null,
+          value.designationDate ?? null,
+          payload,
+          source,
+          entryId,
+        );
       }
     });
   }
@@ -488,7 +527,11 @@ export class ScreeningService {
    */
   async rebuildNameIndex(): Promise<void> {
     const handle = await this.designationHandle();
-    const slice = handle.prepare<{ id: string; payload: string; primary_name: string }>(
+    const slice = handle.prepare<{
+      id: string;
+      payload: string;
+      primary_name: string;
+    }>(
       `SELECT id, primary_name, payload FROM designation
        WHERE id > ? ORDER BY id LIMIT ${NAME_INDEX_SLICE}`,
     );
@@ -499,20 +542,26 @@ export class ScreeningService {
 
     handle.transaction(() => {
       handle.exec(`DELETE FROM ${NAME_TABLE}`);
-      let cursor = '';
-      for (; ;) {
+      let cursor = "";
+      for (;;) {
         const rows = slice.all(cursor);
         if (rows.length === 0) return;
         for (const row of rows) {
           const payload = JSON.parse(row.payload) as DesignationPayload;
           const names: NameRecord[] = [
-            { name: row.primary_name, nameType: 'primary' },
+            { name: row.primary_name, nameType: "primary" },
             ...payload.aliases,
           ];
           for (const rec of names) {
             const normalized = fold(rec.name);
             if (!normalized) continue;
-            insertName.run(row.id, rec.name, normalized, doubleMetaphone(normalized), rec.nameType);
+            insertName.run(
+              row.id,
+              rec.name,
+              normalized,
+              doubleMetaphone(normalized),
+              rec.nameType,
+            );
           }
         }
         cursor = rows[rows.length - 1]?.id ?? cursor;
@@ -534,7 +583,8 @@ export class ScreeningService {
         legal_address: e.legalAddress ?? null,
         headquarters_address: e.headquartersAddress ?? null,
         registration_authority_id: e.registrationAuthorityId ?? null,
-        registration_authority_entity_id: e.registrationAuthorityEntityId ?? null,
+        registration_authority_entity_id:
+          e.registrationAuthorityEntityId ?? null,
         last_update: e.lastUpdate ?? null,
         payload: JSON.stringify(e),
       })),
@@ -566,8 +616,11 @@ export class ScreeningService {
 
     handle.transaction(() => {
       if (replaceByChild) {
-        const clear = handle.prepare(`DELETE FROM ${LEI_RELATIONSHIP_TABLE} WHERE child_lei = ?`);
-        for (const child of new Set(relationships.map((r) => r.childLei))) clear.run(child);
+        const clear = handle.prepare(
+          `DELETE FROM ${LEI_RELATIONSHIP_TABLE} WHERE child_lei = ?`,
+        );
+        for (const child of new Set(relationships.map((r) => r.childLei)))
+          clear.run(child);
       }
       const insert = handle.prepare(
         `INSERT OR REPLACE INTO ${LEI_RELATIONSHIP_TABLE}
@@ -598,7 +651,10 @@ export class ScreeningService {
 
   /** Primary name + aliases as one list, primary first. */
   private allNames(d: NormalizedDesignation): NameRecord[] {
-    return [{ name: d.primaryName, nameType: 'primary' as const }, ...d.payload.aliases];
+    return [
+      { name: d.primaryName, nameType: "primary" as const },
+      ...d.payload.aliases,
+    ];
   }
 
   /**
@@ -609,7 +665,7 @@ export class ScreeningService {
    */
   async markSanctionsReady(total: number): Promise<void> {
     await this.designationMirror.store.writeState({
-      status: 'complete',
+      status: "complete",
       completedAt: new Date().toISOString(),
       total,
     });
@@ -618,7 +674,7 @@ export class ScreeningService {
   /** Mark the GLEIF mirror's sync state complete — see {@link markSanctionsReady}. */
   async markLeiReady(total: number): Promise<void> {
     await this.leiMirror.store.writeState({
-      status: 'complete',
+      status: "complete",
       completedAt: new Date().toISOString(),
       total,
     });
@@ -639,9 +695,13 @@ export class ScreeningService {
    * {@link markLeiReady} passes all three (`status`, `completedAt`, `total`)
    * explicitly to actually move them.
    */
-  async advanceLeiFreshnessIfReady(): Promise<{ advanced: boolean; entityCount: number }> {
+  async advanceLeiFreshnessIfReady(): Promise<{
+    advanced: boolean;
+    entityCount: number;
+  }> {
     const readiness = await this.leiReadiness();
-    if (!readiness.ready) return { advanced: false, entityCount: readiness.entityCount };
+    if (!readiness.ready)
+      return { advanced: false, entityCount: readiness.entityCount };
     await this.markLeiReady(readiness.entityCount);
     return { advanced: true, entityCount: readiness.entityCount };
   }
@@ -669,7 +729,10 @@ export class ScreeningService {
    * then all-tokens-present (FTS5). Fuzzy mode (explicit, or auto when strict is
    * empty) adds Jaro-Winkler + phonetic scoring against the per-alias index.
    */
-  async screenName(opts: ScreenNameOptions, ctx: Context): Promise<ScreenNameResult> {
+  async screenName(
+    opts: ScreenNameOptions,
+    ctx: ServiceLogContext,
+  ): Promise<ScreenNameResult> {
     const normalizedQuery = fold(opts.query);
     const queryTokens = tokenize(normalizedQuery);
     const handle = await this.designationHandle();
@@ -680,8 +743,8 @@ export class ScreeningService {
     // anyway so the service stays injection-safe for any future caller that
     // reaches it without re-validating (matches the jurisdiction handling below).
     const typeFilter =
-      opts.entityType === 'any'
-        ? ''
+      opts.entityType === "any"
+        ? ""
         : ` AND d.entity_type = '${this.escapeLiteral(opts.entityType)}'`;
 
     // Step 1+2: exact-normalized, then strict all-tokens-present (FTS5 AND).
@@ -696,19 +759,20 @@ export class ScreeningService {
     // result ONLY when auto-fallback is enabled (the default — off for internal
     // cross-reference screens, see ScreenNameOptions.autoFallback).
     const wantFuzzy =
-      opts.matchMode === 'fuzzy' || (opts.autoFallback !== false && strictHits.length === 0);
+      opts.matchMode === "fuzzy" ||
+      (opts.autoFallback !== false && strictHits.length === 0);
     if (!wantFuzzy || queryTokens.length === 0) {
-      ctx.log.debug('Strict screening complete', {
+      ctx.log.debug("Strict screening complete", {
         normalizedQuery,
         hitCount: strictHits.length,
       });
       return {
         hits: strictHits.slice(offset, offset + opts.limit),
-        modeUsed: 'strict',
+        modeUsed: "strict",
         normalizedQuery,
         fuzzyFallbackTriggered: false,
         totalAvailable: strictHits.length,
-        totalAvailableBasis: strict.capped ? 'lower_bound' : 'exact',
+        totalAvailableBasis: strict.capped ? "lower_bound" : "exact",
       };
     }
 
@@ -725,7 +789,7 @@ export class ScreeningService {
 
     // Merge: keep strict hits (deterministic, unscored) ahead of fuzzy, dedup by id.
     const merged = this.mergeHits(strictHits, fuzzyHits);
-    ctx.log.debug('Fuzzy screening complete', {
+    ctx.log.debug("Fuzzy screening complete", {
       normalizedQuery,
       strictCount: strictHits.length,
       fuzzyCount: fuzzyHits.length,
@@ -733,22 +797,24 @@ export class ScreeningService {
     });
     return {
       hits: merged.slice(offset, offset + opts.limit),
-      modeUsed: 'fuzzy',
+      modeUsed: "fuzzy",
       normalizedQuery,
-      fuzzyFallbackTriggered: opts.matchMode === 'strict' && strictHits.length === 0,
+      fuzzyFallbackTriggered:
+        opts.matchMode === "strict" && strictHits.length === 0,
       totalAvailable: merged.length,
       // The fuzzy pool comes from bounded blocking queries and is truncated to
       // `fuzzyMaxResults` before the merge, so no fuzzy-mode count can be a
       // corpus-wide total — it is always a floor on what scoring actually saw.
-      totalAvailableBasis: 'lower_bound',
+      totalAvailableBasis: "lower_bound",
     };
   }
 
   private sourceFilterClause(sources: SourceCode[]): string {
-    if (sources.length === 0 || sources.length === SOURCE_CODES.length) return '';
+    if (sources.length === 0 || sources.length === SOURCE_CODES.length)
+      return "";
     // Source codes are enum-constrained upstream; escape at the sink regardless
     // so the IN-list stays injection-safe independent of the caller.
-    const list = sources.map((s) => `'${this.escapeLiteral(s)}'`).join(', ');
+    const list = sources.map((s) => `'${this.escapeLiteral(s)}'`).join(", ");
     return ` AND d.source IN (${list})`;
   }
 
@@ -781,10 +847,10 @@ export class ScreeningService {
     const byDesignation = new Map<string, ScreeningHit>();
     for (const row of rows) {
       const isExact = row.normalized === args.normalizedQuery;
-      const hit = this.rowToHit(row, isExact ? 'exact' : 'strong');
+      const hit = this.rowToHit(row, isExact ? "exact" : "strong");
       const existing = byDesignation.get(row.designation_id);
       // Prefer the higher-confidence match type per designation.
-      if (!existing || (isExact && existing.matchType !== 'exact')) {
+      if (!existing || (isExact && existing.matchType !== "exact")) {
         byDesignation.set(row.designation_id, hit);
       }
     }
@@ -813,7 +879,9 @@ export class ScreeningService {
     },
   ): ScreeningHit[] {
     const queryPhonetic = doubleMetaphone(args.normalizedQuery);
-    const phoneticKeys = [...new Set(queryPhonetic.split(/\s+/).filter(Boolean))];
+    const phoneticKeys = [
+      ...new Set(queryPhonetic.split(/\s+/).filter(Boolean)),
+    ];
 
     // Candidate pool from two blocking strategies, each query SEPARATELY so no
     // one strategy starves the others under the row cap:
@@ -835,7 +903,9 @@ export class ScreeningService {
          FROM ${NAME_TABLE} n
          JOIN designation d ON d.id = n.designation_id`;
     const prefixes = [
-      ...new Set(args.queryTokens.map((t) => t.slice(0, 3)).filter((p) => p.length >= 2)),
+      ...new Set(
+        args.queryTokens.map((t) => t.slice(0, 3)).filter((p) => p.length >= 2),
+      ),
     ];
     // Per-strategy budget keeps total work bounded while guaranteeing fair
     // representation; the final scored set is still capped to `args.cap`.
@@ -846,21 +916,21 @@ export class ScreeningService {
     };
 
     if (phoneticKeys.length > 0) {
-      const placeholders = phoneticKeys.map(() => '?').join(', ');
+      const placeholders = phoneticKeys.map(() => "?").join(", ");
       collect(
         handle
-          .prepare<NameJoinRow & { rowid: number }>(
-            `${select} WHERE n.phonetic IN (${placeholders})${args.sourceFilter}${args.typeFilter} LIMIT ?`,
-          )
+          .prepare<
+            NameJoinRow & { rowid: number }
+          >(`${select} WHERE n.phonetic IN (${placeholders})${args.sourceFilter}${args.typeFilter} LIMIT ?`)
           .all(...phoneticKeys, perStrategyLimit),
       );
     }
     for (const prefix of prefixes) {
       collect(
         handle
-          .prepare<NameJoinRow & { rowid: number }>(
-            `${select} WHERE n.normalized LIKE ?${args.sourceFilter}${args.typeFilter} LIMIT ?`,
-          )
+          .prepare<
+            NameJoinRow & { rowid: number }
+          >(`${select} WHERE n.normalized LIKE ?${args.sourceFilter}${args.typeFilter} LIMIT ?`)
           .all(`%${prefix}%`, perStrategyLimit),
       );
     }
@@ -888,7 +958,11 @@ export class ScreeningService {
       const wholeScore = jaroWinkler(args.normalizedQuery, row.normalized);
       // Coverage is computed for every candidate, not just the ones the token arm
       // gates: it is BOTH an admission input and the surfaced ranking key.
-      const covered = tokenCoverage(args.queryTokens, candidateTokens, args.minScore);
+      const covered = tokenCoverage(
+        args.queryTokens,
+        candidateTokens,
+        args.minScore,
+      );
 
       if (
         this.admitFuzzy(
@@ -901,7 +975,7 @@ export class ScreeningService {
           args.minScore,
         )
       ) {
-        const hit = this.rowToHit(row, 'approximate');
+        const hit = this.rowToHit(row, "approximate");
         hit.score = Number(Math.max(tokenScore, wholeScore).toFixed(4));
         hit.queryTokenCoverage = { covered, total: args.queryTokens.length };
         scored.push(hit);
@@ -919,7 +993,11 @@ export class ScreeningService {
       }
     }
     return [...byDesignation.values()]
-      .sort((a, b) => compareFuzzyRank(a, b) || a.designationId.localeCompare(b.designationId))
+      .sort(
+        (a, b) =>
+          compareFuzzyRank(a, b) ||
+          a.designationId.localeCompare(b.designationId),
+      )
       .slice(0, args.cap);
   }
 
@@ -969,7 +1047,8 @@ export class ScreeningService {
   ): boolean {
     if (
       wholeScore >= minScore &&
-      lengthRatio(normalizedQuery, candidateNormalized) >= WHOLE_STRING_MIN_LENGTH_RATIO
+      lengthRatio(normalizedQuery, candidateNormalized) >=
+        WHOLE_STRING_MIN_LENGTH_RATIO
     ) {
       return true;
     }
@@ -977,7 +1056,10 @@ export class ScreeningService {
     return coveredTokens * 2 >= queryTokenCount;
   }
 
-  private mergeHits(strict: ScreeningHit[], fuzzy: ScreeningHit[]): ScreeningHit[] {
+  private mergeHits(
+    strict: ScreeningHit[],
+    fuzzy: ScreeningHit[],
+  ): ScreeningHit[] {
     const seen = new Set(strict.map((h) => h.designationId));
     const out = [...strict];
     for (const hit of fuzzy) {
@@ -989,7 +1071,10 @@ export class ScreeningService {
     return out;
   }
 
-  private rowToHit(row: NameJoinRow, matchType: ScreeningHit['matchType']): ScreeningHit {
+  private rowToHit(
+    row: NameJoinRow,
+    matchType: ScreeningHit["matchType"],
+  ): ScreeningHit {
     return {
       designationId: row.designation_id,
       source: row.source as SourceCode,
@@ -997,28 +1082,35 @@ export class ScreeningService {
       entityType: row.entity_type as EntityType,
       primaryName: row.primary_name,
       matchedName: row.name,
-      matchedNameType: row.name_type as NameRecord['nameType'],
+      matchedNameType: row.name_type as NameRecord["nameType"],
       matchType,
       ...(row.program ? { program: row.program } : {}),
-      ...(row.designation_date ? { designationDate: row.designation_date } : {}),
+      ...(row.designation_date
+        ? { designationDate: row.designation_date }
+        : {}),
     };
   }
 
   // ─── Identifier search ───────────────────────────────────────────────────
 
   /** Search published identifiers such as IMO, tax IDs, passports, and registrations. */
-  async searchIdentifier(opts: SearchIdentifierOptions): Promise<SearchIdentifierResult> {
+  async searchIdentifier(
+    opts: SearchIdentifierOptions,
+  ): Promise<SearchIdentifierResult> {
     const normalizedQuery = fold(opts.query);
-    const normalizedType = opts.identifierType ? fold(opts.identifierType) : undefined;
+    const normalizedType = opts.identifierType
+      ? fold(opts.identifierType)
+      : undefined;
     const offset = opts.offset ?? 0;
     const handle = await this.designationHandle();
     const sourceFilter = this.sourceFilterClause(opts.sources);
     const typeFilter =
-      opts.entityType === 'any'
-        ? ''
+      opts.entityType === "any"
+        ? ""
         : ` AND d.entity_type = '${this.escapeLiteral(opts.entityType)}'`;
 
-    if (!normalizedQuery) return { hits: [], normalizedQuery, totalAvailable: 0 };
+    if (!normalizedQuery)
+      return { hits: [], normalizedQuery, totalAvailable: 0 };
 
     const rows = handle
       .prepare<{
@@ -1045,8 +1137,10 @@ export class ScreeningService {
       for (const identifier of payload.identifiers) {
         const value = fold(identifier.value);
         const identifierType = fold(identifier.type);
-        if (normalizedType && !identifierType.includes(normalizedType)) continue;
-        if (value !== normalizedQuery && !value.includes(normalizedQuery)) continue;
+        if (normalizedType && !identifierType.includes(normalizedType))
+          continue;
+        if (value !== normalizedQuery && !value.includes(normalizedQuery))
+          continue;
         hits.push({
           designationId: row.id,
           source: row.source as SourceCode,
@@ -1054,9 +1148,11 @@ export class ScreeningService {
           entityType: row.entity_type as EntityType,
           primaryName: row.primary_name,
           identifier,
-          matchType: value === normalizedQuery ? 'exact' : 'contains',
+          matchType: value === normalizedQuery ? "exact" : "contains",
           ...(row.program ? { program: row.program } : {}),
-          ...(row.designation_date ? { designationDate: row.designation_date } : {}),
+          ...(row.designation_date
+            ? { designationDate: row.designation_date }
+            : {}),
         });
       }
     }
@@ -1078,8 +1174,13 @@ export class ScreeningService {
   // ─── Designation detail ────────────────────────────────────────────────────
 
   /** Full normalized designation by source + entry id, or null if absent. */
-  async getDesignation(source: SourceCode, entryId: string): Promise<NormalizedDesignation | null> {
-    const rows = await this.designationMirror.getByIds([`${source}:${entryId}`]);
+  async getDesignation(
+    source: SourceCode,
+    entryId: string,
+  ): Promise<NormalizedDesignation | null> {
+    const rows = await this.designationMirror.getByIds([
+      `${source}:${entryId}`,
+    ]);
     const row = rows[0];
     if (!row) return null;
     return {
@@ -1090,7 +1191,9 @@ export class ScreeningService {
       primaryName: String(row.primary_name),
       ...(row.program ? { program: String(row.program) } : {}),
       ...(row.legal_basis ? { legalBasis: String(row.legal_basis) } : {}),
-      ...(row.designation_date ? { designationDate: String(row.designation_date) } : {}),
+      ...(row.designation_date
+        ? { designationDate: String(row.designation_date) }
+        : {}),
       payload: JSON.parse(String(row.payload)) as DesignationPayload,
     };
   }
@@ -1098,7 +1201,10 @@ export class ScreeningService {
   // ─── LEI resolution ──────────────────────────────────────────────────────
 
   /** Resolve a company name to ranked GLEIF LEI candidates. */
-  async resolveEntity(opts: ResolveEntityOptions, ctx: Context): Promise<ResolveEntityResult> {
+  async resolveEntity(
+    opts: ResolveEntityOptions,
+    ctx: ServiceLogContext,
+  ): Promise<ResolveEntityResult> {
     const normalizedQuery = fold(opts.query);
     const queryTokens = tokenize(normalizedQuery);
     const handle = await this.leiHandle();
@@ -1106,22 +1212,28 @@ export class ScreeningService {
 
     const filters: string[] = [];
     if (opts.jurisdiction)
-      filters.push(`e.jurisdiction = '${this.escapeLiteral(opts.jurisdiction)}'`);
-    if (opts.status === 'issued') filters.push(`UPPER(e.status) = 'ISSUED'`);
-    else if (opts.status === 'lapsed') filters.push(`UPPER(e.status) != 'ISSUED'`);
-    const filterClause = filters.length ? ` AND ${filters.join(' AND ')}` : '';
+      filters.push(
+        `e.jurisdiction = '${this.escapeLiteral(opts.jurisdiction)}'`,
+      );
+    if (opts.status === "issued") filters.push(`UPPER(e.status) = 'ISSUED'`);
+    else if (opts.status === "lapsed")
+      filters.push(`UPPER(e.status) != 'ISSUED'`);
+    const filterClause = filters.length ? ` AND ${filters.join(" AND ")}` : "";
 
-    const strictScan = this.runLeiStrict(handle, { normalizedQuery, filterClause });
+    const strictScan = this.runLeiStrict(handle, {
+      normalizedQuery,
+      filterClause,
+    });
     const strict = strictScan.results;
-    const wantFuzzy = opts.matchMode === 'fuzzy' || strict.length === 0;
+    const wantFuzzy = opts.matchMode === "fuzzy" || strict.length === 0;
     if (!wantFuzzy || queryTokens.length === 0) {
       return {
         matches: strict.slice(offset, offset + opts.limit),
-        modeUsed: 'strict',
+        modeUsed: "strict",
         normalizedQuery,
         fuzzyFallbackTriggered: false,
         totalAvailable: strict.length,
-        totalAvailableBasis: strictScan.capped ? 'lower_bound' : 'exact',
+        totalAvailableBasis: strictScan.capped ? "lower_bound" : "exact",
       };
     }
 
@@ -1135,20 +1247,21 @@ export class ScreeningService {
     });
     const seen = new Set(strict.map((m) => m.lei));
     const merged = [...strict, ...fuzzy.filter((m) => !seen.has(m.lei))];
-    ctx.log.debug('LEI resolution complete', {
+    ctx.log.debug("LEI resolution complete", {
       normalizedQuery,
       strictCount: strict.length,
       fuzzyCount: fuzzy.length,
     });
     return {
       matches: merged.slice(offset, offset + opts.limit),
-      modeUsed: 'fuzzy',
+      modeUsed: "fuzzy",
       normalizedQuery,
-      fuzzyFallbackTriggered: opts.matchMode === 'strict' && strict.length === 0,
+      fuzzyFallbackTriggered:
+        opts.matchMode === "strict" && strict.length === 0,
       totalAvailable: merged.length,
       // Same bound as the screening path: the fuzzy candidate pool is blocked and
       // capped before the merge, so its count is a floor, never a corpus total.
-      totalAvailableBasis: 'lower_bound',
+      totalAvailableBasis: "lower_bound",
     };
   }
 
@@ -1172,10 +1285,16 @@ export class ScreeningService {
       results: rows
         .map((row) => {
           const isExact = row.normalized_name === args.normalizedQuery;
-          return this.leiRowToMatch(row, isExact ? 'exact' : 'strong', row.legal_name);
+          return this.leiRowToMatch(
+            row,
+            isExact ? "exact" : "strong",
+            row.legal_name,
+          );
         })
         .sort(
-          (a, b) => matchRank(b.matchType) - matchRank(a.matchType) || a.lei.localeCompare(b.lei),
+          (a, b) =>
+            matchRank(b.matchType) - matchRank(a.matchType) ||
+            a.lei.localeCompare(b.lei),
         ),
       capped: rows.length >= LEI_STRICT_RAW_ROW_CAP,
     };
@@ -1196,7 +1315,9 @@ export class ScreeningService {
     // when the first token wasn't the entity's leading word (order swaps) or was
     // a common word that exhausted the cap before the distinctive token's rows.
     const prefixes = [
-      ...new Set(args.queryTokens.map((t) => t.slice(0, 3)).filter((p) => p.length >= 2)),
+      ...new Set(
+        args.queryTokens.map((t) => t.slice(0, 3)).filter((p) => p.length >= 2),
+      ),
     ];
     const perStrategyLimit = Math.max(args.cap * 4, 200);
     const byLei = new Map<string, LeiCandidateRow>();
@@ -1215,7 +1336,10 @@ export class ScreeningService {
 
     const scored: LeiMatch[] = [];
     for (const row of rows) {
-      const names = [row.legal_name, ...(JSON.parse(row.other_names || '[]') as string[])];
+      const names = [
+        row.legal_name,
+        ...(JSON.parse(row.other_names || "[]") as string[]),
+      ];
       // Same admission gate as runFuzzy, applied per candidate name: a name is
       // eligible only when it explains enough of the query (the whole string clears
       // the floor, or at least half the query tokens do), so one strong token pair
@@ -1231,7 +1355,11 @@ export class ScreeningService {
         const candidateTokens = tokenize(folded);
         const wholeScore = jaroWinkler(args.normalizedQuery, folded);
         const tokenScore = bestTokenScore(args.queryTokens, candidateTokens);
-        const covered = tokenCoverage(args.queryTokens, candidateTokens, args.minScore);
+        const covered = tokenCoverage(
+          args.queryTokens,
+          candidateTokens,
+          args.minScore,
+        );
         if (
           !this.admitFuzzy(
             args.normalizedQuery,
@@ -1254,9 +1382,12 @@ export class ScreeningService {
         admitted = true;
       }
       if (admitted) {
-        const m = this.leiRowToMatch(row, 'approximate', bestName);
+        const m = this.leiRowToMatch(row, "approximate", bestName);
         m.score = Number(best.toFixed(4));
-        m.queryTokenCoverage = { covered: bestCovered, total: args.queryTokens.length };
+        m.queryTokenCoverage = {
+          covered: bestCovered,
+          total: args.queryTokens.length,
+        };
         scored.push(m);
       }
     }
@@ -1267,7 +1398,7 @@ export class ScreeningService {
 
   private leiRowToMatch(
     row: LeiCandidateRow,
-    matchType: LeiMatch['matchType'],
+    matchType: LeiMatch["matchType"],
     matchedName: string,
   ): LeiMatch {
     return {
@@ -1291,7 +1422,7 @@ export class ScreeningService {
   /** Direct relationship edges for an LEI in the requested direction(s). */
   async getRelationships(
     lei: string,
-    direction: 'parents' | 'children' | 'both',
+    direction: "parents" | "children" | "both",
   ): Promise<NormalizedLeiRelationship[]> {
     const handle = await this.leiHandle();
     const out: NormalizedLeiRelationship[] = [];
@@ -1299,22 +1430,30 @@ export class ScreeningService {
       childLei: r.child_lei,
       parentLei: r.parent_lei,
       relationshipType: r.relationship_type,
-      ...(r.relationship_status ? { relationshipStatus: r.relationship_status } : {}),
-      ...(r.relationship_period ? { relationshipPeriod: r.relationship_period } : {}),
+      ...(r.relationship_status
+        ? { relationshipStatus: r.relationship_status }
+        : {}),
+      ...(r.relationship_period
+        ? { relationshipPeriod: r.relationship_period }
+        : {}),
     });
 
-    if (direction === 'parents' || direction === 'both') {
+    if (direction === "parents" || direction === "both") {
       out.push(
         ...handle
-          .prepare<RelRow>(`SELECT * FROM ${LEI_RELATIONSHIP_TABLE} WHERE child_lei = ?`)
+          .prepare<RelRow>(
+            `SELECT * FROM ${LEI_RELATIONSHIP_TABLE} WHERE child_lei = ?`,
+          )
           .all(lei)
           .map(mapRel),
       );
     }
-    if (direction === 'children' || direction === 'both') {
+    if (direction === "children" || direction === "both") {
       out.push(
         ...handle
-          .prepare<RelRow>(`SELECT * FROM ${LEI_RELATIONSHIP_TABLE} WHERE parent_lei = ?`)
+          .prepare<RelRow>(
+            `SELECT * FROM ${LEI_RELATIONSHIP_TABLE} WHERE parent_lei = ?`,
+          )
           .all(lei)
           .map(mapRel),
       );
@@ -1337,12 +1476,16 @@ export class ScreeningService {
   async sourceCounts(): Promise<SourceStatus[]> {
     const handle = await this.designationHandle();
     const rows = handle
-      .prepare<{ source: string; n: number }>(
-        `SELECT source, COUNT(*) AS n FROM designation GROUP BY source`,
-      )
+      .prepare<{
+        source: string;
+        n: number;
+      }>(`SELECT source, COUNT(*) AS n FROM designation GROUP BY source`)
       .all();
     const bySource = new Map(rows.map((r) => [r.source, r.n]));
-    return SOURCE_CODES.map((code) => ({ code, recordCount: bySource.get(code) ?? 0 }));
+    return SOURCE_CODES.map((code) => ({
+      code,
+      recordCount: bySource.get(code) ?? 0,
+    }));
   }
 
   /** Sanctions mirror readiness + freshness. */
@@ -1357,11 +1500,17 @@ export class ScreeningService {
     const status = this.toReadiness(await this.leiMirror.status());
     const handle = await this.leiHandle();
     const entityCount =
-      handle.prepare<{ n: number }>(`SELECT COUNT(*) AS n FROM ${leiStoreSpec.table}`).get()?.n ??
-      0;
+      handle
+        .prepare<{
+          n: number;
+        }>(`SELECT COUNT(*) AS n FROM ${leiStoreSpec.table}`)
+        .get()?.n ?? 0;
     const relationshipCount =
-      handle.prepare<{ n: number }>(`SELECT COUNT(*) AS n FROM ${LEI_RELATIONSHIP_TABLE}`).get()
-        ?.n ?? 0;
+      handle
+        .prepare<{
+          n: number;
+        }>(`SELECT COUNT(*) AS n FROM ${LEI_RELATIONSHIP_TABLE}`)
+        .get()?.n ?? 0;
     return { ...status, entityCount, relationshipCount };
   }
 
@@ -1387,18 +1536,21 @@ export class ScreeningService {
 
   /** Close both mirrors (lifecycle scripts / shutdown). */
   async close(): Promise<void> {
-    await Promise.allSettled([this.designationMirror.close(), this.leiMirror.close()]);
+    await Promise.allSettled([
+      this.designationMirror.close(),
+      this.leiMirror.close(),
+    ]);
   }
 }
 
 /** Rank for sorting match types (exact > strong > approximate). */
-function matchRank(type: ScreeningHit['matchType']): number {
-  return type === 'exact' ? 3 : type === 'strong' ? 2 : 1;
+function matchRank(type: ScreeningHit["matchType"]): number {
+  return type === "exact" ? 3 : type === "strong" ? 2 : 1;
 }
 
 /** Rank for sorting identifier match types (exact > contains). */
-function identifierMatchRank(type: IdentifierSearchHit['matchType']): number {
-  return type === 'exact' ? 2 : 1;
+function identifierMatchRank(type: IdentifierSearchHit["matchType"]): number {
+  return type === "exact" ? 2 : 1;
 }
 
 /**
@@ -1434,8 +1586,11 @@ function compareFuzzyRank(
  * `./data/sanctions.gleif.db`). Keeps the two mirrors' sync-state independent.
  */
 function gleifPath(sanctionsPath: string): string {
-  const dot = sanctionsPath.lastIndexOf('.');
-  const slash = Math.max(sanctionsPath.lastIndexOf('/'), sanctionsPath.lastIndexOf('\\'));
+  const dot = sanctionsPath.lastIndexOf(".");
+  const slash = Math.max(
+    sanctionsPath.lastIndexOf("/"),
+    sanctionsPath.lastIndexOf("\\"),
+  );
   return dot > slash
     ? `${sanctionsPath.slice(0, dot)}.gleif${sanctionsPath.slice(dot)}`
     : `${sanctionsPath}.gleif`;
@@ -1455,14 +1610,19 @@ async function* emptySync(): AsyncGenerator<SyncPage> {
 let _service: ScreeningService | undefined;
 
 /** Initialize the screening service. Call from `createApp()` `setup()`. */
-export function initScreeningService(_config?: AppConfig, _storage?: StorageService): void {
+export function initScreeningService(
+  _config?: AppConfig,
+  _storage?: StorageService,
+): void {
   _service = new ScreeningService(getServerConfig());
 }
 
 /** Access the screening service; throws if not initialized. */
 export function getScreeningService(): ScreeningService {
   if (!_service) {
-    throw new Error('ScreeningService not initialized — call initScreeningService() in setup()');
+    throw new Error(
+      "ScreeningService not initialized — call initScreeningService() in setup()",
+    );
   }
   return _service;
 }
