@@ -245,6 +245,39 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 # Server listens at http://localhost:3010/mcp
 ```
 
+To call the endpoint manually, send the MCP `initialize` request first, followed
+by `tools/list` or `tools/call`. The following examples use PowerShell on
+Windows; use `curl.exe` rather than PowerShell's `curl` alias:
+
+```powershell
+curl.exe -i http://localhost:3010/mcp `
+  -H "Content-Type: application/json" `
+  -H "Accept: application/json, text/event-stream" `
+  --data-raw '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"manual-client","version":"1.0"}}}'
+
+curl.exe http://localhost:3010/mcp `
+  -H "Content-Type: application/json" `
+  -H "Accept: application/json, text/event-stream" `
+  --data-raw '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+
+curl.exe http://localhost:3010/mcp `
+  -H "Content-Type: application/json" `
+  -H "Accept: application/json, text/event-stream" `
+  --data-raw '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sanctions_screen_name","arguments":{"name":"ACME Corporation"}}}'
+```
+
+The hosted instance is available at
+`https://sanctions-screening.caseyjhand.com/mcp` and does not require local
+mirror initialization. For a self-hosted instance, populate the local mirror
+before screening:
+
+```sh
+bun run mirror:init
+```
+
+This full load includes GLEIF and can take a long time. To load only the
+sanctions lists, set `SANCTIONS_INIT_SKIP_GLEIF=1` before running the command.
+
 ### Prerequisites
 
 - [Bun v1.3](https://bun.sh/) or higher (or Node.js v24+).
@@ -258,26 +291,26 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 git clone https://github.com/cyanheads/sanctions-screening-mcp-server.git
 ```
 
-2. **Navigate into the directory:**
+1. **Navigate into the directory:**
 
 ```sh
 cd sanctions-screening-mcp-server
 ```
 
-3. **Install dependencies:**
+1. **Install dependencies:**
 
 ```sh
 bun install
 ```
 
-4. **Configure environment:**
+1. **Configure environment:**
 
 ```sh
 cp .env.example .env
 # edit .env if you need to override defaults (all optional)
 ```
 
-5. **Populate the mirror:**
+1. **Populate the mirror:**
 
 ```sh
 bun run mirror:init
