@@ -267,6 +267,14 @@ Endpoint rollout status:
 - `POST /api/v1/screening/batch` - implemented (in-process execution)
 - `GET /api/v1/exceptions/{bpId}` - implemented (in-memory store)
 - `POST /api/v1/exceptions/{bpId}` - implemented (in-memory store)
+- `GET /api/v1/compliance/cases` - implemented (case worklist, in-memory store)
+- `GET /api/v1/compliance/cases/{caseId}` - implemented (case detail, hits, decisions)
+- `POST /api/v1/compliance/cases/{caseId}/decision` - implemented (manual decision + optional four-eyes approval)
+
+Compliance case worklist UI (MVP):
+
+- `GET /ui/compliance-cases` renders a lightweight Fiori-style worklist over the REST endpoints above.
+- Cases are auto-created when a screening request with `bpId` returns one or more hits.
 
 Example:
 

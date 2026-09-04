@@ -389,6 +389,19 @@ entity AuditLogs : cuid {
 5. **Exportkontroll-Quellen** (BIS Entity/DPL/Unverified List) als neuer Ingest-Service nach bestehendem Muster im MCP-Server.
 6. **Deployment der Screening-Engine** (weiter Node/Bun-Hosting, ggf. ebenfalls auf BTP) — unabhängig von der CAP-App, kann parallel laufen.
 
+### Umsetzungsstand Punkt 3 (MVP, 2026-09-04)
+
+Punkt 3 wurde als lauffähiger MVP direkt in der REST-Fassade umgesetzt:
+
+- UI-Route: `GET /ui/compliance-cases` (Fiori-nahe Worklist/Detail/Decision-Oberfläche)
+- Case-APIs:
+  - `GET /api/v1/compliance/cases`
+  - `GET /api/v1/compliance/cases/{caseId}`
+  - `POST /api/v1/compliance/cases/{caseId}/decision`
+- Cases entstehen automatisch bei Screening-Treffern mit `bpId`.
+
+Wichtig: Der Zustand liegt aktuell noch in-memory im laufenden Prozess (kein persistentes Audit-Backend). Für produktive Compliance-Nachweispflichten bleibt die geplante CAP/HANA-Audit-Schicht unverändert erforderlich.
+
 ---
 
 ## Offene Fragen für die nächste Konkretisierungsrunde

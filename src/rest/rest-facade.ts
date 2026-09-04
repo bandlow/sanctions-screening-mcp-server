@@ -127,6 +127,16 @@ const CreateExceptionRequestSchema = z
   })
   .strict();
 
+const CaseDecisionRequestSchema = z
+  .object({
+    decision: z.enum(["confirmed_match", "false_positive", "escalate"]),
+    decidedBy: z.string().min(1),
+    proposedBy: z.string().min(1).optional(),
+    approvedBy: z.string().min(1).optional(),
+    comment: z.string().min(1).optional(),
+  })
+  .strict();
+
 type BusinessPartnerScreenRequest = z.infer<
   typeof BusinessPartnerScreenRequestSchema
 >;
@@ -155,11 +165,49 @@ type StoredException = {
   createdAt: string;
 };
 
+type StoredCaseHit = {
+  hitId: string;
+  source: string;
+  sourceEntryId: string;
+  matchedName: string;
+  matchType: "exact" | "strong" | "approximate";
+  score?: number;
+  reviewStatus: "open" | "confirmed_match" | "false_positive" | "escalated";
+};
+
+type StoredCaseDecision = {
+  decisionId: string;
+  decision: "confirmed_match" | "false_positive" | "escalate";
+  decidedBy: string;
+  proposedBy: string;
+  approvedBy?: string;
+  comment?: string;
+  requiresFourEyes: boolean;
+  approvalStatus: "not_required" | "pending" | "approved";
+  decidedAt: string;
+};
+
+type StoredComplianceCase = {
+  caseId: string;
+  bpId: string;
+  businessPartnerName: string;
+  status: "open" | "in_review" | "pending_approval" | "closed";
+  priority: "low" | "medium" | "high";
+  createdAt: string;
+  updatedAt: string;
+  latestEventId: string;
+  eventIds: string[];
+  hits: StoredCaseHit[];
+  decisions: StoredCaseDecision[];
+};
+
 let restServer: Server | undefined;
 const DEFAULT_REST_TIMEOUT_MS = 30_000;
 const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
 const historyByBpId = new Map<string, StoredScreeningEvent[]>();
 const exceptionsByBpId = new Map<string, StoredException[]>();
+const complianceCasesById = new Map<string, StoredComplianceCase>();
+const complianceCaseIdsByBpId = new Map<string, string[]>();
 
 /** Start the REST facade when running on HTTP transport. Idempotent per process. */
 export async function startRestFacade(): Promise<void> {
@@ -194,6 +242,27 @@ export async function startRestFacade(): Promise<void> {
   );
 }
 
+/** Stop the REST facade and clear in-process REST state. Safe to call repeatedly. */
+export async function stopRestFacade(): Promise<void> {
+  if (!restServer) {
+    clearRestState();
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    restServer?.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+
+  restServer = undefined;
+  clearRestState();
+}
+
 async function routeRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -214,6 +283,34 @@ async function routeRequest(
 
     if (req.method === "GET" && url.pathname === "/api/v1/sources") {
       await handleListSources(res);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/ui/compliance-cases") {
+      writeHtml(res, 200, renderComplianceCasesUiHtml());
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/v1/compliance/cases") {
+      handleListComplianceCases(url, res);
+      return;
+    }
+
+    const complianceCaseMatch = matchComplianceCasePath(url.pathname);
+    if (req.method === "GET" && complianceCaseMatch) {
+      handleGetComplianceCase(complianceCaseMatch.caseId, res);
+      return;
+    }
+
+    const complianceCaseDecisionMatch = matchComplianceCaseDecisionPath(
+      url.pathname,
+    );
+    if (req.method === "POST" && complianceCaseDecisionMatch) {
+      await handleDecideComplianceCase(
+        complianceCaseDecisionMatch.caseId,
+        req,
+        res,
+      );
       return;
     }
 
@@ -337,8 +434,9 @@ async function handleBusinessPartnerScreen(
   }
 
   if (input.bpId) {
+    const eventId = randomUUID();
     appendHistoryEvent({
-      eventId: randomUUID(),
+      eventId,
       bpId: input.bpId,
       queryName: input.name,
       matchMode: input.matchMode,
@@ -352,6 +450,13 @@ async function handleBusinessPartnerScreen(
       hitCount: response.body.hits.length,
       screeningStatus: "screened",
     });
+
+    upsertComplianceCaseFromScreening(
+      input.bpId,
+      input.name,
+      eventId,
+      response.body.hits,
+    );
   }
 
   writeJson(res, 200, response.body);
@@ -455,8 +560,9 @@ async function handleScreeningBatch(
 
     processedCount += 1;
     if (item.bpId) {
+      const eventId = randomUUID();
       appendHistoryEvent({
-        eventId: randomUUID(),
+        eventId,
         bpId: item.bpId,
         queryName: item.name,
         matchMode: input.screening?.matchMode ?? "strict",
@@ -470,6 +576,13 @@ async function handleScreeningBatch(
         hitCount: response.body.hits.length,
         screeningStatus: "screened",
       });
+
+      upsertComplianceCaseFromScreening(
+        item.bpId,
+        item.name,
+        eventId,
+        response.body.hits,
+      );
     }
   }
 
@@ -490,6 +603,172 @@ function handleListExceptions(bpId: string, res: ServerResponse): void {
   writeJson(res, 200, {
     bpId,
     exceptions,
+  });
+}
+
+function handleListComplianceCases(url: URL, res: ServerResponse): void {
+  const statusFilter = url.searchParams.get("status");
+  const validStatus = new Set([
+    "open",
+    "in_review",
+    "pending_approval",
+    "closed",
+  ]);
+  if (statusFilter && !validStatus.has(statusFilter)) {
+    writeJson(res, 400, {
+      error: {
+        code: "validation_error",
+        message:
+          "Query parameter 'status' must be one of: open, in_review, pending_approval, closed.",
+      },
+    });
+    return;
+  }
+
+  const limit = parsePositiveInt(url.searchParams.get("limit"), 25, 100);
+  const offset = parsePositiveInt(url.searchParams.get("offset"), 0, 1_000_000);
+
+  const allCases = [...complianceCasesById.values()]
+    .filter((item) => (statusFilter ? item.status === statusFilter : true))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const page = allCases.slice(offset, offset + limit);
+
+  writeJson(res, 200, {
+    pagination: {
+      limit,
+      offset,
+      returned: page.length,
+      totalAvailable: allCases.length,
+      hasMore: offset + page.length < allCases.length,
+      ...(offset + page.length < allCases.length
+        ? { nextOffset: offset + page.length }
+        : {}),
+    },
+    cases: page.map((item) => ({
+      caseId: item.caseId,
+      bpId: item.bpId,
+      businessPartnerName: item.businessPartnerName,
+      status: item.status,
+      priority: item.priority,
+      createdAt: item.createdAt,
+      updatedAt: item.updatedAt,
+      latestEventId: item.latestEventId,
+      hitCount: item.hits.length,
+      openHitCount: item.hits.filter((h) => h.reviewStatus === "open").length,
+    })),
+  });
+}
+
+function handleGetComplianceCase(caseId: string, res: ServerResponse): void {
+  const existing = complianceCasesById.get(caseId);
+  if (!existing) {
+    writeJson(res, 404, {
+      error: {
+        code: "not_found",
+        message: `No compliance case with id '${caseId}'.`,
+      },
+    });
+    return;
+  }
+
+  writeJson(res, 200, {
+    case: existing,
+  });
+}
+
+async function handleDecideComplianceCase(
+  caseId: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const payload = await readJsonBodyForRoute(req, res);
+  if (payload === undefined) return;
+
+  const parsed = CaseDecisionRequestSchema.safeParse(payload);
+  if (!parsed.success) {
+    writeJson(res, 400, {
+      error: {
+        code: "validation_error",
+        message: "Invalid request payload for compliance case decision.",
+        details: parsed.error.flatten(),
+      },
+    });
+    return;
+  }
+
+  const existing = complianceCasesById.get(caseId);
+  if (!existing) {
+    writeJson(res, 404, {
+      error: {
+        code: "not_found",
+        message: `No compliance case with id '${caseId}'.`,
+      },
+    });
+    return;
+  }
+
+  const decisionInput = parsed.data;
+  const proposedBy = decisionInput.proposedBy ?? decisionInput.decidedBy;
+  if (decisionInput.approvedBy && decisionInput.approvedBy === proposedBy) {
+    writeJson(res, 400, {
+      error: {
+        code: "validation_error",
+        message:
+          "Four-eyes rule violated: approvedBy must be different from proposedBy.",
+      },
+    });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const requiresFourEyes = decisionInput.decision !== "false_positive";
+  const approvalStatus = requiresFourEyes
+    ? decisionInput.approvedBy
+      ? "approved"
+      : "pending"
+    : "not_required";
+
+  const decision: StoredCaseDecision = {
+    decisionId: randomUUID(),
+    decision: decisionInput.decision,
+    decidedBy: decisionInput.decidedBy,
+    proposedBy,
+    ...(decisionInput.approvedBy
+      ? { approvedBy: decisionInput.approvedBy }
+      : {}),
+    ...(decisionInput.comment ? { comment: decisionInput.comment } : {}),
+    requiresFourEyes,
+    approvalStatus,
+    decidedAt: now,
+  };
+
+  existing.decisions.unshift(decision);
+  existing.updatedAt = now;
+  existing.status =
+    decisionInput.decision === "false_positive"
+      ? "closed"
+      : decisionInput.approvedBy
+        ? "closed"
+        : "pending_approval";
+
+  const reviewStatus =
+    decisionInput.decision === "confirmed_match"
+      ? "confirmed_match"
+      : decisionInput.decision === "false_positive"
+        ? "false_positive"
+        : "escalated";
+
+  for (const hit of existing.hits) {
+    if (hit.reviewStatus === "open") {
+      hit.reviewStatus = reviewStatus;
+    }
+  }
+
+  writeJson(res, 200, {
+    caseId: existing.caseId,
+    status: existing.status,
+    decision,
+    note: "Decision recorded. A screening hit remains a candidate to verify; final action is subject to your compliance workflow.",
   });
 }
 
@@ -677,6 +956,13 @@ function appendHistoryEvent(event: StoredScreeningEvent): void {
   historyByBpId.set(event.bpId, current);
 }
 
+function clearRestState(): void {
+  historyByBpId.clear();
+  exceptionsByBpId.clear();
+  complianceCasesById.clear();
+  complianceCaseIdsByBpId.clear();
+}
+
 function parsePositiveInt(
   raw: string | null,
   defaultValue: number,
@@ -717,6 +1003,131 @@ function matchExceptionsPath(pathname: string): { bpId: string } | undefined {
   const match = /^\/api\/v1\/exceptions\/([^/]+)$/.exec(pathname);
   if (!match?.[1]) return undefined;
   return { bpId: decodeURIComponent(match[1]) };
+}
+
+function matchComplianceCasePath(
+  pathname: string,
+): { caseId: string } | undefined {
+  const match = /^\/api\/v1\/compliance\/cases\/([^/]+)$/.exec(pathname);
+  if (!match?.[1]) return undefined;
+  return { caseId: decodeURIComponent(match[1]) };
+}
+
+function matchComplianceCaseDecisionPath(
+  pathname: string,
+): { caseId: string } | undefined {
+  const match = /^\/api\/v1\/compliance\/cases\/([^/]+)\/decision$/.exec(
+    pathname,
+  );
+  if (!match?.[1]) return undefined;
+  return { caseId: decodeURIComponent(match[1]) };
+}
+
+function upsertComplianceCaseFromScreening(
+  bpId: string,
+  businessPartnerName: string,
+  eventId: string,
+  hits: Array<Record<string, unknown>>,
+): void {
+  const caseHits = normalizeCaseHits(hits);
+  if (caseHits.length === 0) return;
+
+  const caseIds = complianceCaseIdsByBpId.get(bpId) ?? [];
+  const openCase = caseIds
+    .map((id) => complianceCasesById.get(id))
+    .find(
+      (item): item is StoredComplianceCase =>
+        !!item && item.status !== "closed",
+    );
+
+  if (openCase) {
+    openCase.updatedAt = new Date().toISOString();
+    openCase.latestEventId = eventId;
+    openCase.eventIds.unshift(eventId);
+    mergeCaseHits(openCase, caseHits);
+    openCase.priority = inferCasePriority(openCase.hits);
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const created: StoredComplianceCase = {
+    caseId: randomUUID(),
+    bpId,
+    businessPartnerName,
+    status: "open",
+    priority: inferCasePriority(caseHits),
+    createdAt: now,
+    updatedAt: now,
+    latestEventId: eventId,
+    eventIds: [eventId],
+    hits: caseHits,
+    decisions: [],
+  };
+
+  complianceCasesById.set(created.caseId, created);
+  complianceCaseIdsByBpId.set(bpId, [created.caseId, ...caseIds]);
+}
+
+function normalizeCaseHits(
+  hits: Array<Record<string, unknown>>,
+): StoredCaseHit[] {
+  const out: StoredCaseHit[] = [];
+  for (const hit of hits) {
+    const source =
+      typeof hit.source === "string" && hit.source.length > 0
+        ? hit.source
+        : undefined;
+    const sourceEntryId =
+      typeof hit.sourceEntryId === "string" && hit.sourceEntryId.length > 0
+        ? hit.sourceEntryId
+        : undefined;
+    const matchedName =
+      typeof hit.matchedName === "string" && hit.matchedName.length > 0
+        ? hit.matchedName
+        : undefined;
+    const matchType =
+      hit.matchType === "exact" ||
+      hit.matchType === "strong" ||
+      hit.matchType === "approximate"
+        ? hit.matchType
+        : undefined;
+    if (!source || !sourceEntryId || !matchedName || !matchType) continue;
+
+    out.push({
+      hitId: randomUUID(),
+      source,
+      sourceEntryId,
+      matchedName,
+      matchType,
+      ...(typeof hit.score === "number" ? { score: hit.score } : {}),
+      reviewStatus: "open",
+    });
+  }
+  return out;
+}
+
+function mergeCaseHits(
+  complianceCase: StoredComplianceCase,
+  newHits: StoredCaseHit[],
+): void {
+  const existingKeys = new Set(
+    complianceCase.hits.map(
+      (hit) => `${hit.source}|${hit.sourceEntryId}|${hit.matchedName}`,
+    ),
+  );
+
+  for (const hit of newHits) {
+    const key = `${hit.source}|${hit.sourceEntryId}|${hit.matchedName}`;
+    if (existingKeys.has(key)) continue;
+    complianceCase.hits.push(hit);
+    existingKeys.add(key);
+  }
+}
+
+function inferCasePriority(hits: StoredCaseHit[]): "low" | "medium" | "high" {
+  if (hits.some((hit) => hit.matchType === "exact")) return "high";
+  if (hits.some((hit) => hit.matchType === "strong")) return "medium";
+  return "low";
 }
 
 function createRequestLogger(
@@ -810,6 +1221,435 @@ function writeJson(
   );
   res.setHeader("X-Rest-Timeout-Ms", String(DEFAULT_REST_TIMEOUT_MS));
   res.end(JSON.stringify(payload));
+}
+
+function writeHtml(res: ServerResponse, status: number, payload: string): void {
+  res.statusCode = status;
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    `Content-Type, X-Request-Id, ${IDEMPOTENCY_KEY_HEADER}`,
+  );
+  res.setHeader("X-Rest-Timeout-Ms", String(DEFAULT_REST_TIMEOUT_MS));
+  res.end(payload);
+}
+
+function renderComplianceCasesUiHtml(): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Compliance Cases</title>
+    <style>
+      :root {
+        --bg: #f3f6f8;
+        --panel: #ffffff;
+        --ink: #0f2a3d;
+        --ink-soft: #4b6070;
+        --accent: #0a6ed1;
+        --accent-strong: #0854a0;
+        --warn: #e9730c;
+        --ok: #107e3e;
+        --risk: #bb0000;
+        --line: #d8e0e8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "72", "Segoe UI", Tahoma, sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 20% 10%, #dceeff 0%, transparent 36%),
+          radial-gradient(circle at 85% 0%, #e5f4ec 0%, transparent 32%),
+          var(--bg);
+      }
+
+      header {
+        padding: 1.1rem 1.4rem;
+        background: linear-gradient(120deg, #0a4b87, #0a6ed1);
+        color: #fff;
+      }
+
+      header h1 {
+        margin: 0;
+        font-size: 1.15rem;
+        font-weight: 600;
+        letter-spacing: 0.01em;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: minmax(18rem, 29rem) 1fr;
+        gap: 1rem;
+        padding: 1rem;
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 0.6rem;
+        box-shadow: 0 0.35rem 1.1rem rgba(5, 34, 60, 0.08);
+      }
+
+      .list-panel {
+        overflow: hidden;
+      }
+
+      .toolbar {
+        display: flex;
+        gap: 0.55rem;
+        align-items: center;
+        padding: 0.8rem;
+        border-bottom: 1px solid var(--line);
+        background: #f9fbfc;
+      }
+
+      select,
+      button,
+      textarea,
+      input {
+        font: inherit;
+      }
+
+      select,
+      input,
+      textarea {
+        border: 1px solid #b8c7d6;
+        border-radius: 0.35rem;
+        padding: 0.45rem 0.55rem;
+      }
+
+      button {
+        border: 0;
+        border-radius: 0.35rem;
+        padding: 0.45rem 0.7rem;
+        background: var(--accent);
+        color: #fff;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: #647a8f;
+      }
+
+      button.warn {
+        background: var(--warn);
+      }
+
+      button.risk {
+        background: var(--risk);
+      }
+
+      #caseList {
+        max-height: calc(100vh - 13rem);
+        overflow: auto;
+      }
+
+      .case-row {
+        padding: 0.7rem 0.8rem;
+        border-bottom: 1px solid var(--line);
+        cursor: pointer;
+      }
+
+      .case-row:hover {
+        background: #f5f9ff;
+      }
+
+      .case-row.active {
+        background: #e9f3fe;
+        border-left: 0.3rem solid var(--accent);
+      }
+
+      .meta {
+        font-size: 0.85rem;
+        color: var(--ink-soft);
+      }
+
+      .badge {
+        display: inline-block;
+        margin-right: 0.35rem;
+        padding: 0.12rem 0.45rem;
+        border-radius: 0.8rem;
+        font-size: 0.74rem;
+        color: #fff;
+        background: #647a8f;
+      }
+
+      .badge.open,
+      .badge.in_review {
+        background: var(--warn);
+      }
+
+      .badge.pending_approval {
+        background: #8e44ad;
+      }
+
+      .badge.closed {
+        background: var(--ok);
+      }
+
+      .detail-panel {
+        padding: 1rem;
+        display: grid;
+        gap: 0.85rem;
+      }
+
+      .detail-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+        gap: 0.6rem;
+      }
+
+      .box {
+        border: 1px solid var(--line);
+        border-radius: 0.45rem;
+        padding: 0.55rem;
+        background: #fcfdff;
+      }
+
+      .hits,
+      .decisions {
+        border-collapse: collapse;
+        width: 100%;
+      }
+
+      .hits th,
+      .hits td,
+      .decisions th,
+      .decisions td {
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        padding: 0.42rem;
+        font-size: 0.88rem;
+      }
+
+      .form {
+        display: grid;
+        gap: 0.5rem;
+      }
+
+      .hint {
+        font-size: 0.8rem;
+        color: var(--ink-soft);
+      }
+
+      @media (max-width: 1024px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+
+        #caseList {
+          max-height: 22rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Compliance Case Worklist</h1>
+    </header>
+    <main>
+      <section class="panel list-panel">
+        <div class="toolbar">
+          <label for="statusFilter">Status</label>
+          <select id="statusFilter">
+            <option value="">All</option>
+            <option value="open">Open</option>
+            <option value="in_review">In Review</option>
+            <option value="pending_approval">Pending Approval</option>
+            <option value="closed">Closed</option>
+          </select>
+          <button id="refreshBtn" class="secondary">Refresh</button>
+        </div>
+        <div id="caseList"></div>
+      </section>
+      <section class="panel detail-panel">
+        <div id="detailEmpty" class="hint">Select a case from the worklist.</div>
+        <div id="detailRoot" hidden>
+          <h2 id="detailTitle" style="margin-top:0"></h2>
+          <div id="detailMeta" class="detail-grid"></div>
+
+          <h3 style="margin-bottom:0.3rem">Hits</h3>
+          <table class="hits">
+            <thead>
+              <tr><th>Source</th><th>Entry</th><th>Matched Name</th><th>Type</th><th>Status</th></tr>
+            </thead>
+            <tbody id="hitsBody"></tbody>
+          </table>
+
+          <h3 style="margin-bottom:0.3rem">Decisions</h3>
+          <table class="decisions">
+            <thead>
+              <tr><th>At</th><th>Decision</th><th>By</th><th>Approval</th><th>Comment</th></tr>
+            </thead>
+            <tbody id="decisionsBody"></tbody>
+          </table>
+
+          <h3 style="margin-bottom:0.3rem">Record Decision</h3>
+          <div class="form">
+            <select id="decisionType">
+              <option value="false_positive">False Positive</option>
+              <option value="confirmed_match">Confirmed Match</option>
+              <option value="escalate">Escalate</option>
+            </select>
+            <input id="decidedBy" placeholder="decidedBy (required)" />
+            <input id="approvedBy" placeholder="approvedBy (optional, must differ for 4-eyes)" />
+            <textarea id="decisionComment" rows="3" placeholder="comment (optional)"></textarea>
+            <div style="display:flex; gap:0.5rem; align-items:center">
+              <button id="submitDecision">Submit Decision</button>
+              <span class="hint" id="decisionResult"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      const state = { cases: [], selectedCaseId: null };
+
+      async function loadCases() {
+        const status = document.getElementById('statusFilter').value;
+        const query = status ? '?status=' + encodeURIComponent(status) : '';
+        const response = await fetch('/api/v1/compliance/cases' + query);
+        const payload = await response.json();
+        state.cases = payload.cases || [];
+        renderList();
+        if (state.selectedCaseId) {
+          await loadCase(state.selectedCaseId);
+        }
+      }
+
+      function renderList() {
+        const root = document.getElementById('caseList');
+        if (!state.cases.length) {
+          root.innerHTML = '<div class="case-row"><div class="meta">No cases available yet. Run screening with hits to create cases.</div></div>';
+          return;
+        }
+
+        root.innerHTML = state.cases.map((c) => {
+          const active = c.caseId === state.selectedCaseId ? 'active' : '';
+          return '<div class="case-row ' + active + '" data-case-id="' + c.caseId + '">' +
+            '<div><span class="badge ' + c.status + '">' + c.status + '</span><strong>' + escapeHtml(c.businessPartnerName) + '</strong></div>' +
+            '<div class="meta">BP: ' + escapeHtml(c.bpId) + ' | Priority: ' + c.priority + ' | Hits: ' + c.hitCount + '</div>' +
+          '</div>';
+        }).join('');
+
+        root.querySelectorAll('.case-row[data-case-id]').forEach((el) => {
+          el.addEventListener('click', async () => {
+            state.selectedCaseId = el.getAttribute('data-case-id');
+            renderList();
+            await loadCase(state.selectedCaseId);
+          });
+        });
+      }
+
+      async function loadCase(caseId) {
+        const response = await fetch('/api/v1/compliance/cases/' + encodeURIComponent(caseId));
+        if (!response.ok) return;
+        const payload = await response.json();
+        renderDetail(payload.case);
+      }
+
+      function renderDetail(c) {
+        document.getElementById('detailEmpty').hidden = true;
+        document.getElementById('detailRoot').hidden = false;
+        document.getElementById('detailTitle').textContent = c.businessPartnerName + ' (' + c.bpId + ')';
+
+        const meta = document.getElementById('detailMeta');
+        meta.innerHTML = [
+          box('Case ID', c.caseId),
+          box('Status', c.status),
+          box('Priority', c.priority),
+          box('Latest Event', c.latestEventId),
+          box('Created', c.createdAt),
+          box('Updated', c.updatedAt),
+        ].join('');
+
+        document.getElementById('hitsBody').innerHTML = (c.hits || []).map((h) =>
+          '<tr>' +
+            '<td>' + escapeHtml(h.source) + '</td>' +
+            '<td>' + escapeHtml(h.sourceEntryId) + '</td>' +
+            '<td>' + escapeHtml(h.matchedName) + '</td>' +
+            '<td>' + escapeHtml(h.matchType) + (h.score !== undefined ? ' (' + h.score.toFixed(3) + ')' : '') + '</td>' +
+            '<td>' + escapeHtml(h.reviewStatus) + '</td>' +
+          '</tr>'
+        ).join('');
+
+        document.getElementById('decisionsBody').innerHTML = (c.decisions || []).map((d) =>
+          '<tr>' +
+            '<td>' + escapeHtml(d.decidedAt) + '</td>' +
+            '<td>' + escapeHtml(d.decision) + '</td>' +
+            '<td>' + escapeHtml(d.decidedBy) + '</td>' +
+            '<td>' + escapeHtml(d.approvalStatus) + '</td>' +
+            '<td>' + escapeHtml(d.comment || '') + '</td>' +
+          '</tr>'
+        ).join('');
+      }
+
+      function box(label, value) {
+        return '<div class="box"><div class="meta">' + escapeHtml(label) + '</div><div>' + escapeHtml(String(value || '')) + '</div></div>';
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
+      }
+
+      async function submitDecision() {
+        if (!state.selectedCaseId) return;
+        const decision = document.getElementById('decisionType').value;
+        const decidedBy = document.getElementById('decidedBy').value.trim();
+        const approvedBy = document.getElementById('approvedBy').value.trim();
+        const comment = document.getElementById('decisionComment').value.trim();
+        if (!decidedBy) {
+          document.getElementById('decisionResult').textContent = 'decidedBy is required.';
+          return;
+        }
+
+        const body = {
+          decision,
+          decidedBy,
+          ...(approvedBy ? { approvedBy } : {}),
+          ...(comment ? { comment } : {}),
+        };
+
+        const response = await fetch('/api/v1/compliance/cases/' + encodeURIComponent(state.selectedCaseId) + '/decision', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+
+        const payload = await response.json();
+        if (!response.ok) {
+          document.getElementById('decisionResult').textContent = payload?.error?.message || 'Decision failed.';
+          return;
+        }
+
+        document.getElementById('decisionResult').textContent = 'Decision saved.';
+        await loadCases();
+      }
+
+      document.getElementById('refreshBtn').addEventListener('click', loadCases);
+      document.getElementById('statusFilter').addEventListener('change', loadCases);
+      document.getElementById('submitDecision').addEventListener('click', submitDecision);
+
+      loadCases().catch(() => {
+        document.getElementById('caseList').innerHTML = '<div class="case-row"><div class="meta">Unable to load cases.</div></div>';
+      });
+    </script>
+  </body>
+</html>`;
 }
 
 function toError(error: unknown): Error {
