@@ -91,6 +91,8 @@ const BusinessPartnerScreenRequestSchema = z
   .strict();
 
 let restServer: Server | undefined;
+const DEFAULT_REST_TIMEOUT_MS = 30_000;
+const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
 
 /** Start the REST facade when running on HTTP transport. Idempotent per process. */
 export async function startRestFacade(): Promise<void> {
@@ -145,6 +147,35 @@ async function routeRequest(
 
     if (req.method === "GET" && url.pathname === "/api/v1/sources") {
       await handleListSources(res);
+      return;
+    }
+
+    const historyMatch = matchBpHistoryPath(url.pathname);
+    if (req.method === "GET" && historyMatch) {
+      writeNotImplemented(
+        res,
+        "history_not_implemented",
+        "Business-partner screening history is defined but not implemented yet.",
+      );
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/v1/screening/batch") {
+      writeNotImplemented(
+        res,
+        "batch_not_implemented",
+        "Batch screening is defined but not implemented yet.",
+      );
+      return;
+    }
+
+    const exceptionMatch = matchExceptionsPath(url.pathname);
+    if ((req.method === "GET" || req.method === "POST") && exceptionMatch) {
+      writeNotImplemented(
+        res,
+        "exceptions_not_implemented",
+        "Exception management is defined but not implemented yet.",
+      );
       return;
     }
 
@@ -221,7 +252,9 @@ async function handleBusinessPartnerScreen(
   res: ServerResponse,
   reqLog: ContextLogger,
 ): Promise<void> {
-  const payload = await readJsonBody(req);
+  const payload = await readJsonBodyForRoute(req, res);
+  if (payload === undefined) return;
+
   const parsed = BusinessPartnerScreenRequestSchema.safeParse(payload);
   if (!parsed.success) {
     writeJson(res, 400, {
@@ -316,6 +349,57 @@ async function handleBusinessPartnerScreen(
     })),
     ...(notice ? { notice } : {}),
     caveat: SCREENING_CAVEAT,
+  });
+}
+
+async function readJsonBodyForRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<unknown | undefined> {
+  try {
+    return await readJsonBody(req);
+  } catch (error) {
+    const err = toError(error);
+    writeJson(res, 400, {
+      error: {
+        code: "validation_error",
+        message: err.message,
+      },
+    });
+    return undefined;
+  }
+}
+
+function matchBpHistoryPath(pathname: string): { bpId: string } | undefined {
+  const match = /^\/api\/v1\/screening\/business-partner\/([^/]+)\/history$/.exec(
+    pathname,
+  );
+  if (!match?.[1]) return undefined;
+  return { bpId: decodeURIComponent(match[1]) };
+}
+
+function matchExceptionsPath(pathname: string): { bpId: string } | undefined {
+  const match = /^\/api\/v1\/exceptions\/([^/]+)$/.exec(pathname);
+  if (!match?.[1]) return undefined;
+  return { bpId: decodeURIComponent(match[1]) };
+}
+
+function writeNotImplemented(
+  res: ServerResponse,
+  code: string,
+  message: string,
+): void {
+  writeJson(res, 501, {
+    error: {
+      code,
+      message,
+      recovery:
+        "Refer to docs/rest-facade-openapi.yaml for the API contract and rollout status.",
+    },
+    contract: {
+      timeoutMs: DEFAULT_REST_TIMEOUT_MS,
+      idempotencyHeader: IDEMPOTENCY_KEY_HEADER,
+    },
   });
 }
 

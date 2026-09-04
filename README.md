@@ -253,10 +253,20 @@ When running in HTTP mode, the server also exposes a REST facade on
 With the example above (`MCP_HTTP_PORT=3010`), REST is available at
 `http://localhost:3011/api/v1`.
 
-Implemented endpoints:
+API contract:
 
-- `POST /api/v1/screening/business-partner` - screen one business partner name
-- `GET /api/v1/sources` - mirror readiness, freshness, and source provenance
+- OpenAPI 3.1 spec: `docs/rest-facade-openapi.yaml`
+- Default request timeout contract: `30000ms`
+- Recommended idempotency header for POST routes: `Idempotency-Key`
+
+Endpoint rollout status:
+
+- `POST /api/v1/screening/business-partner` - implemented
+- `GET /api/v1/sources` - implemented
+- `GET /api/v1/screening/business-partner/{bpId}/history` - planned (returns `501`)
+- `POST /api/v1/screening/batch` - planned (returns `501`)
+- `GET /api/v1/exceptions/{bpId}` - planned (returns `501`)
+- `POST /api/v1/exceptions/{bpId}` - planned (returns `501`)
 
 Example:
 
