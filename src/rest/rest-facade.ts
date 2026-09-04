@@ -90,9 +90,76 @@ const BusinessPartnerScreenRequestSchema = z
   })
   .strict();
 
+const BatchScreenRequestSchema = z
+  .object({
+    items: z
+      .array(
+        z
+          .object({
+            bpId: z.string().min(1).optional(),
+            name: z.string().min(1),
+            country: z.string().length(2).optional(),
+            role: z.enum(["customer", "vendor", "other"]).optional(),
+          })
+          .strict(),
+      )
+      .min(1),
+    screening: z
+      .object({
+        entityType: z
+          .enum(["any", "person", "organization", "vessel", "aircraft"])
+          .default("any"),
+        matchMode: z.enum(["strict", "fuzzy"]).default("strict"),
+        minScore: z.number().min(0).max(1).optional(),
+        sources: z.array(SOURCE_ENUM).optional(),
+        limit: z.number().int().min(1).max(100).default(25),
+      })
+      .optional(),
+  })
+  .strict();
+
+const CreateExceptionRequestSchema = z
+  .object({
+    sourceEntryId: z.string().min(1),
+    justification: z.string().min(1),
+    validFrom: z.string().optional(),
+    validUntil: z.string().optional(),
+  })
+  .strict();
+
+type BusinessPartnerScreenRequest = z.infer<
+  typeof BusinessPartnerScreenRequestSchema
+>;
+
+type StoredScreeningEvent = {
+  eventId: string;
+  bpId: string;
+  queryName: string;
+  matchMode: "strict" | "fuzzy";
+  matchModeUsed: "strict" | "fuzzy";
+  entityType: "any" | "person" | "organization" | "vessel" | "aircraft";
+  sourcesQueried: string[];
+  sourcesAsOf?: string;
+  executedAt: string;
+  hitCount: number;
+  screeningStatus: "screened" | "not_ready" | "error";
+};
+
+type StoredException = {
+  exceptionId: string;
+  sourceEntryId: string;
+  justification: string;
+  validFrom?: string;
+  validUntil?: string;
+  status: "active";
+  createdAt: string;
+};
+
 let restServer: Server | undefined;
 const DEFAULT_REST_TIMEOUT_MS = 30_000;
 const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+const historyByBpId = new Map<string, StoredScreeningEvent[]>();
+const exceptionsByBpId = new Map<string, StoredException[]>();
 
 /** Start the REST facade when running on HTTP transport. Idempotent per process. */
 export async function startRestFacade(): Promise<void> {
@@ -152,30 +219,23 @@ async function routeRequest(
 
     const historyMatch = matchBpHistoryPath(url.pathname);
     if (req.method === "GET" && historyMatch) {
-      writeNotImplemented(
-        res,
-        "history_not_implemented",
-        "Business-partner screening history is defined but not implemented yet.",
-      );
+      handleBusinessPartnerHistory(historyMatch.bpId, url, res);
       return;
     }
 
     if (req.method === "POST" && url.pathname === "/api/v1/screening/batch") {
-      writeNotImplemented(
-        res,
-        "batch_not_implemented",
-        "Batch screening is defined but not implemented yet.",
-      );
+      await handleScreeningBatch(req, res, reqLog);
       return;
     }
 
     const exceptionMatch = matchExceptionsPath(url.pathname);
-    if ((req.method === "GET" || req.method === "POST") && exceptionMatch) {
-      writeNotImplemented(
-        res,
-        "exceptions_not_implemented",
-        "Exception management is defined but not implemented yet.",
-      );
+    if (req.method === "GET" && exceptionMatch) {
+      handleListExceptions(exceptionMatch.bpId, res);
+      return;
+    }
+
+    if (req.method === "POST" && exceptionMatch) {
+      await handleCreateException(exceptionMatch.bpId, req, res);
       return;
     }
 
@@ -268,18 +328,270 @@ async function handleBusinessPartnerScreen(
   }
 
   const input = parsed.data;
-  const svc = getScreeningService();
+  const response = await executeScreening(input, reqLog);
+  if ("error" in response) {
+    writeJson(res, response.status, {
+      error: response.error,
+    });
+    return;
+  }
 
-  if (!(await svc.sanctionsReady())) {
-    writeJson(res, 503, {
+  if (input.bpId) {
+    appendHistoryEvent({
+      eventId: randomUUID(),
+      bpId: input.bpId,
+      queryName: input.name,
+      matchMode: input.matchMode,
+      matchModeUsed: response.body.screening.matchModeUsed,
+      entityType: input.entityType,
+      sourcesQueried: response.body.screening.sources,
+      ...(response.body.screening.sourcesAsOf
+        ? { sourcesAsOf: response.body.screening.sourcesAsOf }
+        : {}),
+      executedAt: new Date().toISOString(),
+      hitCount: response.body.hits.length,
+      screeningStatus: "screened",
+    });
+  }
+
+  writeJson(res, 200, response.body);
+}
+
+function handleBusinessPartnerHistory(
+  bpId: string,
+  url: URL,
+  res: ServerResponse,
+): void {
+  const limit = parsePositiveInt(url.searchParams.get("limit"), 25, 100);
+  const offset = parsePositiveInt(url.searchParams.get("offset"), 0, 1_000_000);
+
+  const events = historyByBpId.get(bpId) ?? [];
+  const page = events.slice(offset, offset + limit);
+  writeJson(res, 200, {
+    bpId,
+    pagination: {
+      limit,
+      offset,
+      returned: page.length,
+      totalAvailable: events.length,
+      hasMore: offset + page.length < events.length,
+      ...(offset + page.length < events.length
+        ? { nextOffset: offset + page.length }
+        : {}),
+    },
+    events: page,
+  });
+}
+
+async function handleScreeningBatch(
+  req: IncomingMessage,
+  res: ServerResponse,
+  reqLog: ContextLogger,
+): Promise<void> {
+  const payload = await readJsonBodyForRoute(req, res);
+  if (payload === undefined) return;
+
+  const parsed = BatchScreenRequestSchema.safeParse(payload);
+  if (!parsed.success) {
+    writeJson(res, 400, {
+      error: {
+        code: "validation_error",
+        message: "Invalid request payload for screening batch.",
+        details: parsed.error.flatten(),
+      },
+    });
+    return;
+  }
+
+  const input = parsed.data;
+  const batchId = randomUUID();
+  const acceptedAt = new Date().toISOString();
+
+  let processedCount = 0;
+  let failedCount = 0;
+  for (const item of input.items) {
+    const response = await executeScreening(
+      {
+        bpId: item.bpId,
+        name: item.name,
+        ...(item.country ? { country: item.country } : {}),
+        ...(item.role ? { role: item.role } : {}),
+        entityType: input.screening?.entityType ?? "any",
+        matchMode: input.screening?.matchMode ?? "strict",
+        ...(input.screening?.minScore !== undefined
+          ? { minScore: input.screening.minScore }
+          : {}),
+        ...(input.screening?.sources
+          ? { sources: input.screening.sources }
+          : {}),
+        limit: input.screening?.limit ?? 25,
+        offset: 0,
+      },
+      reqLog,
+    );
+
+    if ("error" in response) {
+      failedCount += 1;
+      if (item.bpId) {
+        appendHistoryEvent({
+          eventId: randomUUID(),
+          bpId: item.bpId,
+          queryName: item.name,
+          matchMode: input.screening?.matchMode ?? "strict",
+          matchModeUsed: input.screening?.matchMode ?? "strict",
+          entityType: input.screening?.entityType ?? "any",
+          sourcesQueried:
+            input.screening?.sources && input.screening.sources.length > 0
+              ? input.screening.sources
+              : [...SOURCE_CODES],
+          executedAt: new Date().toISOString(),
+          hitCount: 0,
+          screeningStatus:
+            response.error.code === "mirror_not_ready" ? "not_ready" : "error",
+        });
+      }
+      continue;
+    }
+
+    processedCount += 1;
+    if (item.bpId) {
+      appendHistoryEvent({
+        eventId: randomUUID(),
+        bpId: item.bpId,
+        queryName: item.name,
+        matchMode: input.screening?.matchMode ?? "strict",
+        matchModeUsed: response.body.screening.matchModeUsed,
+        entityType: input.screening?.entityType ?? "any",
+        sourcesQueried: response.body.screening.sources,
+        ...(response.body.screening.sourcesAsOf
+          ? { sourcesAsOf: response.body.screening.sourcesAsOf }
+          : {}),
+        executedAt: new Date().toISOString(),
+        hitCount: response.body.hits.length,
+        screeningStatus: "screened",
+      });
+    }
+  }
+
+  writeJson(res, 202, {
+    batchId,
+    status: "accepted",
+    acceptedAt,
+    acceptedCount: input.items.length,
+    processedCount,
+    failedCount,
+    note: "Batch endpoint currently processes immediately in-process and records per-BP history events.",
+    caveat: SCREENING_CAVEAT,
+  });
+}
+
+function handleListExceptions(bpId: string, res: ServerResponse): void {
+  const exceptions = exceptionsByBpId.get(bpId) ?? [];
+  writeJson(res, 200, {
+    bpId,
+    exceptions,
+  });
+}
+
+async function handleCreateException(
+  bpId: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const payload = await readJsonBodyForRoute(req, res);
+  if (payload === undefined) return;
+
+  const parsed = CreateExceptionRequestSchema.safeParse(payload);
+  if (!parsed.success) {
+    writeJson(res, 400, {
+      error: {
+        code: "validation_error",
+        message: "Invalid request payload for exception creation.",
+        details: parsed.error.flatten(),
+      },
+    });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const created: StoredException = {
+    exceptionId: randomUUID(),
+    sourceEntryId: parsed.data.sourceEntryId,
+    justification: parsed.data.justification,
+    ...(parsed.data.validFrom ? { validFrom: parsed.data.validFrom } : {}),
+    ...(parsed.data.validUntil ? { validUntil: parsed.data.validUntil } : {}),
+    status: "active",
+    createdAt: now,
+  };
+
+  const current = exceptionsByBpId.get(bpId) ?? [];
+  current.push(created);
+  exceptionsByBpId.set(bpId, current);
+
+  writeJson(res, 201, {
+    bpId,
+    exceptionId: created.exceptionId,
+    status: "created",
+    exception: created,
+  });
+}
+
+async function executeScreening(
+  input: BusinessPartnerScreenRequest,
+  reqLog: ContextLogger,
+): Promise<
+  | {
+      body: {
+        businessPartner: {
+          bpId?: string;
+          name: string;
+          country?: string;
+          role?: "customer" | "vendor" | "other";
+        };
+        screening: {
+          normalizedQuery: string;
+          requestedMatchMode: "strict" | "fuzzy";
+          matchModeUsed: "strict" | "fuzzy";
+          entityType: "any" | "person" | "organization" | "vessel" | "aircraft";
+          minScore?: number;
+          sources: Array<z.infer<typeof SOURCE_ENUM>>;
+          sourcesAsOf?: string;
+        };
+        pagination: {
+          limit: number;
+          offset: number;
+          returned: number;
+          totalAvailable: number;
+          totalAvailableBasis: string;
+          hasMore: boolean;
+          nextOffset?: number;
+        };
+        hits: Array<Record<string, unknown>>;
+        notice?: string;
+        caveat: string;
+      };
+    }
+  | {
+      status: 503;
+      error: {
+        code: "mirror_not_ready";
+        message: string;
+        recovery: string;
+      };
+    }
+> {
+  const svc = getScreeningService();
+  const sanctions = await svc.sanctionsReadiness();
+  if (!sanctions.ready) {
+    return {
+      status: 503,
       error: {
         code: "mirror_not_ready",
         message: "The local sanctions mirror is not yet populated.",
         recovery:
           "Run the mirror:init lifecycle script to load the sanctions lists, then retry; check /api/v1/sources for readiness.",
       },
-    });
-    return;
+    };
   }
 
   const sources =
@@ -307,49 +619,73 @@ async function handleBusinessPartnerScreen(
         ? `Offset ${input.offset} is past the end of this result set (${result.totalAvailable} available).`
         : undefined;
 
-  writeJson(res, 200, {
-    businessPartner: {
-      ...(input.bpId ? { bpId: input.bpId } : {}),
-      name: input.name,
-      ...(input.country ? { country: input.country } : {}),
-      ...(input.role ? { role: input.role } : {}),
+  return {
+    body: {
+      businessPartner: {
+        ...(input.bpId ? { bpId: input.bpId } : {}),
+        name: input.name,
+        ...(input.country ? { country: input.country } : {}),
+        ...(input.role ? { role: input.role } : {}),
+      },
+      screening: {
+        normalizedQuery: result.normalizedQuery,
+        requestedMatchMode: input.matchMode,
+        matchModeUsed: result.modeUsed,
+        entityType: input.entityType,
+        ...(input.minScore !== undefined ? { minScore: input.minScore } : {}),
+        sources,
+        ...(sanctions.completedAt
+          ? { sourcesAsOf: sanctions.completedAt }
+          : {}),
+      },
+      pagination: {
+        limit: input.limit,
+        offset: input.offset,
+        returned: result.hits.length,
+        totalAvailable: result.totalAvailable,
+        totalAvailableBasis: result.totalAvailableBasis,
+        hasMore,
+        ...(hasMore ? { nextOffset: input.offset + result.hits.length } : {}),
+      },
+      hits: result.hits.map((hit) => ({
+        source: hit.source,
+        sourceLabel: SOURCE_LABELS[hit.source],
+        sourceEntryId: hit.sourceEntryId,
+        entityType: hit.entityType,
+        primaryName: hit.primaryName,
+        matchedName: hit.matchedName,
+        matchedNameType: hit.matchedNameType,
+        matchType: hit.matchType,
+        ...(hit.score !== undefined ? { score: hit.score } : {}),
+        ...(hit.queryTokenCoverage
+          ? { queryTokenCoverage: hit.queryTokenCoverage }
+          : {}),
+        ...(hit.program ? { program: hit.program } : {}),
+        ...(hit.designationDate
+          ? { designationDate: hit.designationDate }
+          : {}),
+      })),
+      ...(notice ? { notice } : {}),
+      caveat: SCREENING_CAVEAT,
     },
-    screening: {
-      normalizedQuery: result.normalizedQuery,
-      requestedMatchMode: input.matchMode,
-      matchModeUsed: result.modeUsed,
-      entityType: input.entityType,
-      ...(input.minScore !== undefined ? { minScore: input.minScore } : {}),
-      sources,
-    },
-    pagination: {
-      limit: input.limit,
-      offset: input.offset,
-      returned: result.hits.length,
-      totalAvailable: result.totalAvailable,
-      totalAvailableBasis: result.totalAvailableBasis,
-      hasMore,
-      ...(hasMore ? { nextOffset: input.offset + result.hits.length } : {}),
-    },
-    hits: result.hits.map((hit) => ({
-      source: hit.source,
-      sourceLabel: SOURCE_LABELS[hit.source],
-      sourceEntryId: hit.sourceEntryId,
-      entityType: hit.entityType,
-      primaryName: hit.primaryName,
-      matchedName: hit.matchedName,
-      matchedNameType: hit.matchedNameType,
-      matchType: hit.matchType,
-      ...(hit.score !== undefined ? { score: hit.score } : {}),
-      ...(hit.queryTokenCoverage
-        ? { queryTokenCoverage: hit.queryTokenCoverage }
-        : {}),
-      ...(hit.program ? { program: hit.program } : {}),
-      ...(hit.designationDate ? { designationDate: hit.designationDate } : {}),
-    })),
-    ...(notice ? { notice } : {}),
-    caveat: SCREENING_CAVEAT,
-  });
+  };
+}
+
+function appendHistoryEvent(event: StoredScreeningEvent): void {
+  const current = historyByBpId.get(event.bpId) ?? [];
+  current.unshift(event);
+  historyByBpId.set(event.bpId, current);
+}
+
+function parsePositiveInt(
+  raw: string | null,
+  defaultValue: number,
+  max: number,
+): number {
+  if (!raw) return defaultValue;
+  const value = Number.parseInt(raw, 10);
+  if (Number.isNaN(value) || value < 0) return defaultValue;
+  return Math.min(value, max);
 }
 
 async function readJsonBodyForRoute(
@@ -371,9 +707,8 @@ async function readJsonBodyForRoute(
 }
 
 function matchBpHistoryPath(pathname: string): { bpId: string } | undefined {
-  const match = /^\/api\/v1\/screening\/business-partner\/([^/]+)\/history$/.exec(
-    pathname,
-  );
+  const match =
+    /^\/api\/v1\/screening\/business-partner\/([^/]+)\/history$/.exec(pathname);
   if (!match?.[1]) return undefined;
   return { bpId: decodeURIComponent(match[1]) };
 }
@@ -382,25 +717,6 @@ function matchExceptionsPath(pathname: string): { bpId: string } | undefined {
   const match = /^\/api\/v1\/exceptions\/([^/]+)$/.exec(pathname);
   if (!match?.[1]) return undefined;
   return { bpId: decodeURIComponent(match[1]) };
-}
-
-function writeNotImplemented(
-  res: ServerResponse,
-  code: string,
-  message: string,
-): void {
-  writeJson(res, 501, {
-    error: {
-      code,
-      message,
-      recovery:
-        "Refer to docs/rest-facade-openapi.yaml for the API contract and rollout status.",
-    },
-    contract: {
-      timeoutMs: DEFAULT_REST_TIMEOUT_MS,
-      idempotencyHeader: IDEMPOTENCY_KEY_HEADER,
-    },
-  });
 }
 
 function createRequestLogger(
@@ -472,7 +788,10 @@ function writeNoContent(res: ServerResponse): void {
   res.statusCode = 204;
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Request-Id");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    `Content-Type, X-Request-Id, ${IDEMPOTENCY_KEY_HEADER}`,
+  );
   res.end();
 }
 
@@ -485,7 +804,11 @@ function writeJson(
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Request-Id");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    `Content-Type, X-Request-Id, ${IDEMPOTENCY_KEY_HEADER}`,
+  );
+  res.setHeader("X-Rest-Timeout-Ms", String(DEFAULT_REST_TIMEOUT_MS));
   res.end(JSON.stringify(payload));
 }
 

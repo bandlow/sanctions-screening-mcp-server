@@ -94,11 +94,26 @@ paths:
       tags: [Screening]
       summary: Fetch screening history for one business partner
       operationId: getBusinessPartnerHistory
-      x-implementation-status: planned
+      x-implementation-status: implemented
       x-timeout-ms: 30000
       parameters:
         - $ref: '#/components/parameters/XRequestId'
         - $ref: '#/components/parameters/BpIdPath'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
       responses:
         '200':
           description: History entries for the requested business partner.
@@ -106,19 +121,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BusinessPartnerHistoryResponse'
-        '501':
-          description: Endpoint contract is defined but not implemented.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/NotImplementedResponse'
 
   /screening/batch:
     post:
       tags: [Screening]
       summary: Submit a batch screening request
       operationId: submitScreeningBatch
-      x-implementation-status: planned
+      x-implementation-status: implemented
       x-timeout-ms: 30000
       parameters:
         - $ref: '#/components/parameters/XRequestId'
@@ -136,19 +145,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BatchScreenAcceptedResponse'
-        '501':
-          description: Endpoint contract is defined but not implemented.
+        '400':
+          description: Invalid payload.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NotImplementedResponse'
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /exceptions/{bpId}:
     get:
       tags: [Exceptions]
       summary: List exceptions for one business partner
       operationId: listBusinessPartnerExceptions
-      x-implementation-status: planned
+      x-implementation-status: implemented
       x-timeout-ms: 30000
       parameters:
         - $ref: '#/components/parameters/XRequestId'
@@ -160,17 +175,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ExceptionListResponse'
-        '501':
-          description: Endpoint contract is defined but not implemented.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/NotImplementedResponse'
     post:
       tags: [Exceptions]
       summary: Create an exception for one business partner
       operationId: createBusinessPartnerException
-      x-implementation-status: planned
+      x-implementation-status: implemented
       x-timeout-ms: 30000
       parameters:
         - $ref: '#/components/parameters/XRequestId'
@@ -195,12 +204,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '501':
-          description: Endpoint contract is defined but not implemented.
+        '500':
+          description: Unexpected server error.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NotImplementedResponse'
+                $ref: '#/components/schemas/ErrorResponse'
 
 components:
   parameters:
@@ -299,6 +308,9 @@ components:
             sources:
               type: array
               items: { type: string }
+            sourcesAsOf:
+              type: string
+              format: date-time
         pagination:
           type: object
           required: [limit, offset, returned, totalAvailable, totalAvailableBasis, hasMore]
@@ -384,21 +396,54 @@ components:
 
     BusinessPartnerHistoryResponse:
       type: object
-      required: [bpId, events]
+      required: [bpId, pagination, events]
       properties:
         bpId: { type: string }
+        pagination:
+          type: object
+          required: [limit, offset, returned, totalAvailable, hasMore]
+          properties:
+            limit: { type: integer }
+            offset: { type: integer }
+            returned: { type: integer }
+            totalAvailable: { type: integer }
+            hasMore: { type: boolean }
+            nextOffset: { type: integer }
         events:
           type: array
           items:
             type: object
+            required:
+              - eventId
+              - bpId
+              - queryName
+              - matchMode
+              - matchModeUsed
+              - entityType
+              - sourcesQueried
+              - executedAt
+              - hitCount
+              - screeningStatus
             properties:
               eventId: { type: string }
+              bpId: { type: string }
+              queryName: { type: string }
               executedAt:
                 type: string
                 format: date-time
               matchMode: { type: string }
+              matchModeUsed: { type: string }
+              entityType: { type: string }
+              sourcesQueried:
+                type: array
+                items: { type: string }
+              sourcesAsOf:
+                type: string
+                format: date-time
               hitCount: { type: integer }
-              status: { type: string }
+              screeningStatus:
+                type: string
+                enum: [screened, not_ready, error]
 
     BatchScreenRequest:
       type: object
@@ -410,21 +455,68 @@ components:
           minItems: 1
           items:
             type: object
+            additionalProperties: false
             required: [name]
             properties:
               bpId: { type: string }
               name: { type: string }
-              country: { type: string }
-              role: { type: string }
+              country:
+                type: string
+                minLength: 2
+                maxLength: 2
+              role:
+                type: string
+                enum: [customer, vendor, other]
+        screening:
+          type: object
+          properties:
+            entityType:
+              type: string
+              enum: [any, person, organization, vessel, aircraft]
+              default: any
+            matchMode:
+              type: string
+              enum: [strict, fuzzy]
+              default: strict
+            minScore:
+              type: number
+              minimum: 0
+              maximum: 1
+            sources:
+              type: array
+              items:
+                type: string
+                enum: [ofac_sdn, ofac_consolidated, eu, uk, un]
+            limit:
+              type: integer
+              minimum: 1
+              maximum: 100
+              default: 25
 
     BatchScreenAcceptedResponse:
       type: object
-      required: [batchId, status]
+      required:
+        - batchId
+        - status
+        - acceptedAt
+        - acceptedCount
+        - processedCount
+        - failedCount
+        - note
+        - caveat
       properties:
         batchId: { type: string }
         status:
           type: string
           enum: [accepted]
+        acceptedAt:
+          type: string
+          format: date-time
+        acceptedCount: { type: integer }
+        processedCount: { type: integer }
+        failedCount: { type: integer }
+        note: { type: string }
+        caveat: { type: string }
 
     ExceptionListResponse:
       type: object
@@ -435,6 +527,12 @@ components:
           type: array
           items:
             type: object
+            required:
+              - exceptionId
+              - sourceEntryId
+              - justification
+              - status
+              - createdAt
             properties:
               exceptionId: { type: string }
               sourceEntryId: { type: string }
@@ -446,6 +544,9 @@ components:
                 type: string
                 format: date
               status: { type: string }
+              createdAt:
+                type: string
+                format: date-time
 
     CreateExceptionRequest:
       type: object
@@ -467,30 +568,37 @@ components:
 
     CreateExceptionResponse:
       type: object
-      required: [bpId, exceptionId, status]
+      required: [bpId, exceptionId, status, exception]
       properties:
         bpId: { type: string }
         exceptionId: { type: string }
         status:
           type: string
           enum: [created]
-
-    NotImplementedResponse:
-      type: object
-      required: [error, contract]
-      properties:
-        error:
-          $ref: '#/components/schemas/ErrorObject'
-        contract:
+        exception:
           type: object
-          required: [timeoutMs, idempotencyHeader]
+          required:
+            - exceptionId
+            - sourceEntryId
+            - justification
+            - status
+            - createdAt
           properties:
-            timeoutMs:
-              type: integer
-              example: 30000
-            idempotencyHeader:
+            exceptionId: { type: string }
+            sourceEntryId: { type: string }
+            justification: { type: string }
+            validFrom:
               type: string
-              example: Idempotency-Key
+              format: date
+            validUntil:
+              type: string
+              format: date
+            status:
+              type: string
+              enum: [active]
+            createdAt:
+              type: string
+              format: date-time
 
     ErrorResponse:
       type: object
@@ -509,9 +617,6 @@ components:
             - validation_error
             - mirror_not_ready
             - not_found
-            - history_not_implemented
-            - batch_not_implemented
-            - exceptions_not_implemented
             - internal_error
         message:
           type: string

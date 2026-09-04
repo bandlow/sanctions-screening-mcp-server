@@ -263,10 +263,10 @@ Endpoint rollout status:
 
 - `POST /api/v1/screening/business-partner` - implemented
 - `GET /api/v1/sources` - implemented
-- `GET /api/v1/screening/business-partner/{bpId}/history` - planned (returns `501`)
-- `POST /api/v1/screening/batch` - planned (returns `501`)
-- `GET /api/v1/exceptions/{bpId}` - planned (returns `501`)
-- `POST /api/v1/exceptions/{bpId}` - planned (returns `501`)
+- `GET /api/v1/screening/business-partner/{bpId}/history` - implemented
+- `POST /api/v1/screening/batch` - implemented (in-process execution)
+- `GET /api/v1/exceptions/{bpId}` - implemented (in-memory store)
+- `POST /api/v1/exceptions/{bpId}` - implemented (in-memory store)
 
 Example:
 

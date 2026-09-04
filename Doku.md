@@ -1,13 +1,13 @@
-# Doku: Umsetzung Punkt 1 (REST-Fassade spezifizieren)
+# Doku: Umsetzung Punkt 1 und 2 (REST-Fassade)
 
 Datum: 2026-09-04
 
 ## Ziel
 
-Punkt 1 aus der Todo-Liste vollstaendig machen:
+Punkt 1 und 2 aus der Todo-Liste vollstaendig machen:
 - API-Vertrag fuer die REST-Fassade festziehen.
 - Endpunkte, Schemas, Fehlercodes, Idempotenz und Timeout klar dokumentieren.
-- Status der Endpunkte transparent machen (implementiert vs. geplant).
+- REST-Fassade im Server vollstaendig verdrahten und die benoetigten Endpunkte funktional bereitstellen.
 
 ## Durchgefuehrte Aenderungen
 
@@ -31,22 +31,36 @@ Inhalt:
   - implemented fuer bestehende Routen.
   - planned fuer noch nicht gebaute Routen.
 
-### 2) REST-Fassade Codeflaeche auf den Vertragsumfang erweitert
+### 2) REST-Fassade im Server funktional implementiert
 
 Datei: src/rest/rest-facade.ts
 
 Aenderungen:
-- Neue Platzhalter-Routen mit expliziter 501-Antwort statt generischem 404:
+- Neue Endpunkte jetzt fachlich umgesetzt (statt 501-Platzhalter):
   - GET /api/v1/screening/business-partner/{bpId}/history
   - POST /api/v1/screening/batch
   - GET /api/v1/exceptions/{bpId}
   - POST /api/v1/exceptions/{bpId}
-- Einheitliche Not-Implemented-Antwort mit:
-  - error.code und error.message
-  - recovery-Hinweis auf die OpenAPI-Datei
-  - contract.timeoutMs und contract.idempotencyHeader
-- Verbesserte Payload-Fehlerbehandlung fuer bestehendes Screening-POST:
-  - Ungueltiges JSON oder zu grosse Payload wird jetzt als 400 validation_error zurueckgegeben.
+- Screening-Logik zentralisiert:
+  - Gemeinsame Execute-Funktion fuer Single- und Batch-Screening.
+  - Konsistente Antwortstruktur (Treffer als Kandidaten + Caveat).
+  - Quellenstand (`sourcesAsOf`) wird in Screening-Antwort aufgenommen.
+- History-Tracking eingefuehrt:
+  - In-Process Event-Store pro BP (`historyByBpId`).
+  - Jeder Screening-Lauf mit `bpId` erzeugt ein History-Event.
+  - History-Endpoint mit Pagination (`limit`, `offset`).
+- Batch-Verarbeitung umgesetzt:
+  - Endpoint akzeptiert mehrere BP-Eintraege.
+  - Verarbeitet aktuell sofort in-process und schreibt je BP History-Ereignisse.
+  - Rueckgabe mit `202 accepted` inkl. Zaehlern (accepted/processed/failed).
+- Exception-Verwaltung umgesetzt:
+  - In-Process Store pro BP (`exceptionsByBpId`).
+  - POST legt Exceptions mit UUID an, GET listet pro BP.
+- Verbesserte Payload-Fehlerbehandlung:
+  - Ungueltiges JSON oder zu grosse Payload liefert 400 validation_error.
+- REST-CORS/Headers erweitert:
+  - `Idempotency-Key` als erlaubter Header.
+  - `X-Rest-Timeout-Ms` wird in Antworten gesetzt.
 
 ### 3) README aktualisiert
 
@@ -57,19 +71,20 @@ Aenderungen:
   - Verweis auf docs/rest-facade-openapi.yaml
   - Timeout-Vertrag (30000ms)
   - Idempotency-Key Empfehlung
-- Rollout-Statusliste ergaenzt:
-  - implemented fuer bestehende Endpunkte
-  - planned (501) fuer neue Vertragsendpunkte
+- Rollout-Statusliste aktualisiert:
+  - Alle sechs Endpunkte als implemented.
 
 ## Ergebnis
 
-Punkt 1 ist jetzt abgeschlossen:
+Punkt 1 und 2 sind jetzt abgeschlossen:
 - Die REST-Fassade hat einen formalen, versionierbaren API-Vertrag.
 - Alle in der Planung genannten Endpunkte sind im Vertrag enthalten.
-- Nicht implementierte Endpunkte sind im Runtime-Verhalten klar gekennzeichnet (501) statt implizit fehlend.
+- Alle Endpunkte sind im Runtime-Verhalten erreichbar und nicht mehr nur als Platzhalter vorhanden.
 - Fehlercodes, Idempotenz und Timeout sind dokumentiert und konsistent auffindbar.
+- Screening-Ausgaben bleiben entscheidungsoffen (Caveat bleibt Bestandteil jeder Screening-Antwort).
 
 ## Hinweise
 
-- Die Endpunkte history, batch und exceptions sind aktuell absichtlich als planned markiert.
-- Der naechste Schritt waere die fachliche Implementierung hinter diesen Routen (Audit-Historie, Batch-Orchestrierung, Exception-Store).
+- History/Batch/Exceptions sind aktuell bewusst als In-Process-Implementierung umgesetzt.
+- Fuer produktiven Betrieb sollte der Zustand spaeter in die geplante CAP/HANA-Audit-Schicht verlagert werden.
+- Die OpenAPI-Datei spiegelt den aktuellen Ist-Stand (implemented) wider.
