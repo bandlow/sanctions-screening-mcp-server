@@ -15,6 +15,8 @@ import {
   type ServerResponse,
 } from "node:http";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { z, type ContextLogger } from "@cyanheads/mcp-ts-core";
 import { config } from "@cyanheads/mcp-ts-core/config";
 import { logger, requestContextService } from "@cyanheads/mcp-ts-core/utils";
@@ -33,7 +35,16 @@ import {
   type SourceCode,
 } from "@/services/screening/types.js";
 
-const SOURCE_ENUM = z.enum(["ofac_sdn", "ofac_consolidated", "eu", "uk", "un"]);
+const SOURCE_ENUM = z.enum([
+  "ofac_sdn",
+  "ofac_consolidated",
+  "eu",
+  "uk",
+  "un",
+  "us_bis_entity",
+  "us_bis_dpl",
+  "us_bis_unverified",
+]);
 
 const BusinessPartnerScreenRequestSchema = z
   .object({
@@ -304,6 +315,11 @@ const historyByBpId = new Map<string, StoredScreeningEvent[]>();
 const exceptionsByBpId = new Map<string, StoredException[]>();
 const complianceCasesById = new Map<string, StoredComplianceCase>();
 const complianceCaseIdsByBpId = new Map<string, string[]>();
+const OPENAPI_SPEC_PATH = resolve(
+  process.cwd(),
+  "docs",
+  "rest-facade-openapi.yaml",
+);
 
 /** Start the REST facade when running on HTTP transport. Idempotent per process. */
 export async function startRestFacade(): Promise<void> {
@@ -379,6 +395,16 @@ async function routeRequest(
 
     if (req.method === "GET" && url.pathname === "/api/v1/sources") {
       await handleListSources(res);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/v1/openapi.yaml") {
+      await handleOpenApiYaml(res);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/ui/swagger") {
+      writeHtml(res, 200, renderSwaggerUiHtml());
       return;
     }
 
@@ -522,6 +548,21 @@ async function handleListSources(res: ServerResponse): Promise<void> {
     ...(lei.completedAt ? { leiAsOf: lei.completedAt } : {}),
     sources,
   });
+}
+
+async function handleOpenApiYaml(res: ServerResponse): Promise<void> {
+  try {
+    const spec = await readFile(OPENAPI_SPEC_PATH, "utf8");
+    writeText(res, 200, spec, "application/yaml; charset=utf-8");
+  } catch {
+    writeJson(res, 500, {
+      error: {
+        code: "openapi_unavailable",
+        message:
+          "OpenAPI specification file is not available at docs/rest-facade-openapi.yaml.",
+      },
+    });
+  }
 }
 
 async function handleBusinessPartnerScreen(
@@ -1541,6 +1582,72 @@ function writeHtml(res: ServerResponse, status: number, payload: string): void {
   );
   res.setHeader("X-Rest-Timeout-Ms", String(DEFAULT_REST_TIMEOUT_MS));
   res.end(payload);
+}
+
+function writeText(
+  res: ServerResponse,
+  status: number,
+  payload: string,
+  contentType: string,
+): void {
+  res.statusCode = status;
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    `Content-Type, X-Request-Id, ${IDEMPOTENCY_KEY_HEADER}`,
+  );
+  res.setHeader("X-Rest-Timeout-Ms", String(DEFAULT_REST_TIMEOUT_MS));
+  res.end(payload);
+}
+
+function renderSwaggerUiHtml(): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>REST Facade API Docs</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"
+    />
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #f6f8fb;
+      }
+
+      .topbar {
+        padding: 0.75rem 1rem;
+        background: linear-gradient(90deg, #0a4b87, #0a6ed1);
+        color: #fff;
+        font: 600 14px/1.2 "72", "Segoe UI", Tahoma, sans-serif;
+      }
+
+      #swagger-ui {
+        max-width: 1280px;
+        margin: 0 auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="topbar">sanctions-screening-mcp-server REST facade - Swagger UI</div>
+    <div id="swagger-ui"></div>
+
+    <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+      window.ui = SwaggerUIBundle({
+        url: '/api/v1/openapi.yaml',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        displayRequestDuration: true,
+      });
+    </script>
+  </body>
+</html>`;
 }
 
 function renderComplianceCasesUiHtml(): string {

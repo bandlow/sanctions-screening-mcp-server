@@ -10,8 +10,8 @@
  * @module tests/services/ingest-parsers.test
  */
 
-import { deflateRawSync, gzipSync } from 'node:zlib';
-import { describe, expect, it } from 'vitest';
+import { deflateRawSync, gzipSync } from "node:zlib";
+import { describe, expect, it } from "vitest";
 import {
   decompressGleifBuffer,
   parseLeiLevel1,
@@ -20,22 +20,24 @@ import {
   streamLeiLevel1FromText,
   streamLeiLevel2FromBytes,
   streamLeiLevel2FromText,
-} from '@/services/screening/gleif-ingest.js';
-import { createRejections } from '@/services/screening/ingest-validation.js';
+} from "@/services/screening/gleif-ingest.js";
+import { createRejections } from "@/services/screening/ingest-validation.js";
 import {
   createHarvestState,
+  parseBisCsv,
   type HarvestState,
   parseEu,
   parseOfac,
   parseUk,
   parseUn,
+  streamBisCsvFromText,
   streamEuFromText,
   streamOfacFromText,
   streamUkFromText,
   streamUnFromText,
-} from '@/services/screening/sanctions-ingest.js';
-import type { NormalizedDesignation } from '@/services/screening/types.js';
-import { parseXml } from '@/services/screening/xml.js';
+} from "@/services/screening/sanctions-ingest.js";
+import type { NormalizedDesignation } from "@/services/screening/types.js";
+import { parseXml } from "@/services/screening/xml.js";
 
 // ─── OFAC advanced schema (attribute-driven) ────────────────────────────────────
 
@@ -149,55 +151,59 @@ const OFAC_ADVANCED_XML = `<?xml version="1.0" encoding="utf-8"?>
   </SanctionsEntries>
 </Sanctions>`;
 
-describe('OFAC advanced parser', () => {
-  it('extracts id, entity type, primary name, alias, programme and date from attributes', () => {
+describe("OFAC advanced parser", () => {
+  it("extracts id, entity type, primary name, alias, programme and date from attributes", () => {
     const doc = parseXml<Record<string, unknown>>(OFAC_ADVANCED_XML);
-    const designations = parseOfac(doc, 'ofac_sdn');
+    const designations = parseOfac(doc, "ofac_sdn");
     expect(designations).toHaveLength(2);
 
-    const person = designations.find((d) => d.sourceEntryId === '2674');
+    const person = designations.find((d) => d.sourceEntryId === "2674");
     expect(person).toBeDefined();
-    expect(person?.id).toBe('ofac_sdn:2674'); // stable FixedRef id, not a random UUID
-    expect(person?.entityType).toBe('person'); // PartySubTypeID 4 → PartyType 1 (Individual)
-    expect(person?.primaryName).toBe('ABBAS Abu'); // the Primary "Name" alias
-    expect(person?.program).toBe('SDGT'); // from the SanctionsEntry measure comment
-    expect(person?.designationDate).toBe('1995-01-23'); // composed from EntryEvent date
+    expect(person?.id).toBe("ofac_sdn:2674"); // stable FixedRef id, not a random UUID
+    expect(person?.entityType).toBe("person"); // PartySubTypeID 4 → PartyType 1 (Individual)
+    expect(person?.primaryName).toBe("ABBAS Abu"); // the Primary "Name" alias
+    expect(person?.program).toBe("SDGT"); // from the SanctionsEntry measure comment
+    expect(person?.designationDate).toBe("1995-01-23"); // composed from EntryEvent date
     // The non-primary alias is carried as an a.k.a.
-    expect(person?.payload.aliases.some((a) => a.name === 'ZAYDAN' && a.nameType === 'aka')).toBe(
-      true,
-    );
+    expect(
+      person?.payload.aliases.some(
+        (a) => a.name === "ZAYDAN" && a.nameType === "aka",
+      ),
+    ).toBe(true);
     // Birthdate feature extracted.
-    expect(person?.payload.datesOfBirth.some((d) => d.date === '1948-12-10')).toBe(true);
+    expect(
+      person?.payload.datesOfBirth.some((d) => d.date === "1948-12-10"),
+    ).toBe(true);
   });
 
-  it('classifies a vessel from its PartySubTypeID', () => {
+  it("classifies a vessel from its PartySubTypeID", () => {
     const doc = parseXml<Record<string, unknown>>(OFAC_ADVANCED_XML);
-    const designations = parseOfac(doc, 'ofac_sdn');
-    const vessel = designations.find((d) => d.sourceEntryId === '4238');
-    expect(vessel?.entityType).toBe('vessel'); // PartySubTypeID 1 → "Vessel"
-    expect(vessel?.primaryName).toBe('MAR AZUL');
-    expect(vessel?.program).toBe('CUBA');
+    const designations = parseOfac(doc, "ofac_sdn");
+    const vessel = designations.find((d) => d.sourceEntryId === "4238");
+    expect(vessel?.entityType).toBe("vessel"); // PartySubTypeID 1 → "Vessel"
+    expect(vessel?.primaryName).toBe("MAR AZUL");
+    expect(vessel?.program).toBe("CUBA");
     expect(vessel?.payload.identifiers).toEqual([
-      { type: 'Vessel Registration Identification', value: 'IMO 8909575' },
+      { type: "Vessel Registration Identification", value: "IMO 8909575" },
     ]);
     expect(vessel?.payload.addresses).toEqual([
       {
-        full: 'Office 5, Dom 113/5, Vokzalnaya Street, Artyom, Primorsky Krai, 692760, Russia',
-        country: 'Russia',
+        full: "Office 5, Dom 113/5, Vokzalnaya Street, Artyom, Primorsky Krai, 692760, Russia",
+        country: "Russia",
       },
     ]);
   });
 
-  it('drops attributes (and so finds nothing) under the framework default parser', () => {
+  it("drops attributes (and so finds nothing) under the framework default parser", () => {
     // Regression guard: this is exactly why the server needs its own parser. The
     // framework's xmlParser ignores attributes; parsing the same doc with
     // attributes stripped yields no usable entry ids / types.
-    const { XMLParser } = require('fast-xml-parser');
+    const { XMLParser } = require("fast-xml-parser");
     const attrsOff = new XMLParser({ processEntities: false }); // ignoreAttributes defaults true
     const doc = attrsOff.parse(OFAC_ADVANCED_XML) as Record<string, unknown>;
-    const designations = parseOfac(doc, 'ofac_sdn');
+    const designations = parseOfac(doc, "ofac_sdn");
     // Without attributes every entity type collapses to unknown (no PartySubTypeID).
-    expect(designations.every((d) => d.entityType === 'unknown')).toBe(true);
+    expect(designations.every((d) => d.entityType === "unknown")).toBe(true);
   });
 });
 
@@ -220,26 +226,28 @@ const EU_XML = `<?xml version="1.0" encoding="UTF-8"?>
   </sanctionEntity>
 </export>`;
 
-describe('EU parser', () => {
-  it('parses attribute-borne names, type, programme and date (zero rows when attrs are dropped)', () => {
+describe("EU parser", () => {
+  it("parses attribute-borne names, type, programme and date (zero rows when attrs are dropped)", () => {
     const doc = parseXml<Record<string, unknown>>(EU_XML);
     const designations = parseEu(doc);
     expect(designations).toHaveLength(2);
 
-    const person = designations.find((d) => d.sourceEntryId === '13');
-    expect(person?.primaryName).toBe('Saddam Hussein Al-Tikriti');
-    expect(person?.entityType).toBe('person');
-    expect(person?.program).toBe('IRQ');
-    expect(person?.designationDate).toBe('2003-07-08');
-    expect(person?.payload.aliases.some((a) => a.name === 'Abu Ali')).toBe(true);
-    expect(person?.payload.nationalities).toContain('Iraq');
+    const person = designations.find((d) => d.sourceEntryId === "13");
+    expect(person?.primaryName).toBe("Saddam Hussein Al-Tikriti");
+    expect(person?.entityType).toBe("person");
+    expect(person?.program).toBe("IRQ");
+    expect(person?.designationDate).toBe("2003-07-08");
+    expect(person?.payload.aliases.some((a) => a.name === "Abu Ali")).toBe(
+      true,
+    );
+    expect(person?.payload.nationalities).toContain("Iraq");
 
-    const org = designations.find((d) => d.sourceEntryId === '99');
-    expect(org?.entityType).toBe('organization'); // subjectType code "enterprise"
+    const org = designations.find((d) => d.sourceEntryId === "99");
+    expect(org?.entityType).toBe("organization"); // subjectType code "enterprise"
   });
 
-  it('yields no designations when attributes are stripped (the bug this guards)', () => {
-    const { XMLParser } = require('fast-xml-parser');
+  it("yields no designations when attributes are stripped (the bug this guards)", () => {
+    const { XMLParser } = require("fast-xml-parser");
     const attrsOff = new XMLParser({ processEntities: false });
     const doc = attrsOff.parse(EU_XML) as Record<string, unknown>;
     expect(parseEu(doc)).toHaveLength(0);
@@ -264,17 +272,19 @@ const UK_XML = `<?xml version="1.0" encoding="utf-8"?>
   </Designation>
 </Designations>`;
 
-describe('UK parser', () => {
-  it('normalizes an element-based designation with its alias', () => {
+describe("UK parser", () => {
+  it("normalizes an element-based designation with its alias", () => {
     const doc = parseXml<Record<string, unknown>>(UK_XML);
     const designations = parseUk(doc);
     expect(designations).toHaveLength(1);
     const d = designations[0]!;
-    expect(d.sourceEntryId).toBe('AFG0001');
-    expect(d.primaryName).toBe('HAJI KHAIRULLAH MONEY EXCHANGE');
-    expect(d.entityType).toBe('organization');
-    expect(d.program).toBe('Afghanistan');
-    expect(d.payload.aliases.some((a) => a.name === 'Haji Alim Hawala')).toBe(true);
+    expect(d.sourceEntryId).toBe("AFG0001");
+    expect(d.primaryName).toBe("HAJI KHAIRULLAH MONEY EXCHANGE");
+    expect(d.entityType).toBe("organization");
+    expect(d.program).toBe("Afghanistan");
+    expect(d.payload.aliases.some((a) => a.name === "Haji Alim Hawala")).toBe(
+      true,
+    );
   });
 });
 
@@ -302,27 +312,79 @@ const UN_XML = `<?xml version="1.0" encoding="UTF-8"?>
   </ENTITIES>
 </CONSOLIDATED_LIST>`;
 
-describe('UN parser', () => {
-  it('parses individuals and entities with programme, date and nationality', () => {
+describe("UN parser", () => {
+  it("parses individuals and entities with programme, date and nationality", () => {
     const doc = parseXml<Record<string, unknown>>(UN_XML);
     const designations = parseUn(doc);
     expect(designations).toHaveLength(2);
 
-    const person = designations.find((d) => d.sourceEntryId === '6907993');
-    expect(person?.entityType).toBe('person');
-    expect(person?.primaryName).toBe('ERIC BADEGE');
-    expect(person?.program).toBe('DRC');
-    expect(person?.designationDate).toBe('2012-12-31');
-    expect(person?.payload.nationalities).toContain('Democratic Republic of the Congo');
+    const person = designations.find((d) => d.sourceEntryId === "6907993");
+    expect(person?.entityType).toBe("person");
+    expect(person?.primaryName).toBe("ERIC BADEGE");
+    expect(person?.program).toBe("DRC");
+    expect(person?.designationDate).toBe("2012-12-31");
+    expect(person?.payload.nationalities).toContain(
+      "Democratic Republic of the Congo",
+    );
 
-    const org = designations.find((d) => d.sourceEntryId === '6908100');
-    expect(org?.entityType).toBe('organization');
-    expect(org?.primaryName).toBe('EXAMPLE UN ENTITY');
+    const org = designations.find((d) => d.sourceEntryId === "6908100");
+    expect(org?.entityType).toBe("organization");
+    expect(org?.primaryName).toBe("EXAMPLE UN ENTITY");
   });
 });
 
-describe('sanctions parser sparsity and alias quality', () => {
-  it('preserves multiple OFAC standard aliases and weak-alias provenance', () => {
+// ─── US BIS CSV sources (line-oriented) ────────────────────────────────────────
+
+const BIS_ENTITY_CSV = `Entry ID,Name,Entity Type,Country,Address,Effective Date,Program,License Requirement,Registration Number
+BIS-ENT-1001,Example Quantum Components Ltd,Entity,CN,1 Harbor Rd,2024-03-21,Entity List,NLR to listed entity,REG-9981
+BIS-ENT-1002,John Example Person,Individual,IR,2 Example Ave,2023-12-08,Entity List,License Required,PASSPORT-XY77`;
+
+describe("BIS CSV parser", () => {
+  it("normalizes BIS CSV rows into designation records with identifiers", () => {
+    const rejections = createRejections();
+    const designations = parseBisCsv(
+      BIS_ENTITY_CSV,
+      "us_bis_entity",
+      rejections,
+    );
+    expect(designations).toHaveLength(2);
+    expect(rejections).toEqual({ missingIdentifier: 0, unusableName: 0 });
+
+    const entity = designations.find((d) => d.sourceEntryId === "BIS-ENT-1001");
+    expect(entity).toMatchObject({
+      source: "us_bis_entity",
+      entityType: "organization",
+      primaryName: "Example Quantum Components Ltd",
+      designationDate: "2024-03-21",
+      program: "Entity List",
+    });
+    expect(
+      entity?.payload.identifiers.some((id) => id.value === "REG-9981"),
+    ).toBe(true);
+  });
+
+  it("streamed CSV parse matches buffered CSV parse across chunk boundaries", async () => {
+    const oracle = parseBisCsv(BIS_ENTITY_CSV, "us_bis_entity");
+    for (const size of CHUNK_SIZES) {
+      const state = createHarvestState();
+      const records = await collect(
+        streamBisCsvFromText(
+          chunkStr(BIS_ENTITY_CSV, size),
+          "us_bis_entity",
+          state,
+        ),
+      );
+      expect(records, `chunk size ${size}`).toEqual(oracle);
+      expect(state.rejections).toEqual({
+        missingIdentifier: 0,
+        unusableName: 0,
+      });
+    }
+  });
+});
+
+describe("sanctions parser sparsity and alias quality", () => {
+  it("preserves multiple OFAC standard aliases and weak-alias provenance", () => {
     const doc = parseXml<Record<string, unknown>>(`
       <sdnList>
         <sdnEntry>
@@ -341,25 +403,27 @@ describe('sanctions parser sparsity and alias quality', () => {
         </sdnEntry>
       </sdnList>
     `);
-    const [designation] = parseOfac(doc, 'ofac_sdn');
+    const [designation] = parseOfac(doc, "ofac_sdn");
     expect(designation).toMatchObject({
-      sourceEntryId: '12345',
-      entityType: 'person',
-      primaryName: 'Example Person',
+      sourceEntryId: "12345",
+      entityType: "person",
+      primaryName: "Example Person",
     });
     expect(designation?.payload.aliases).toEqual([
-      { name: 'Example Alias', nameType: 'aka' },
-      { name: 'Shortname', nameType: 'low-quality-aka' },
+      { name: "Example Alias", nameType: "aka" },
+      { name: "Shortname", nameType: "low-quality-aka" },
     ]);
-    expect(designation?.payload.identifiers).toEqual([{ type: 'Passport', value: 'P123' }]);
+    expect(designation?.payload.identifiers).toEqual([
+      { type: "Passport", value: "P123" },
+    ]);
     expect(designation?.payload.addresses).toEqual([
-      { full: 'Test City, Testland', country: 'Testland' },
+      { full: "Test City, Testland", country: "Testland" },
     ]);
-    expect(designation?.payload.datesOfBirth).toEqual([{ date: '1980-01-02' }]);
-    expect(designation?.payload.nationalities).toEqual(['Testland']);
+    expect(designation?.payload.datesOfBirth).toEqual([{ date: "1980-01-02" }]);
+    expect(designation?.payload.nationalities).toEqual(["Testland"]);
   });
 
-  it('preserves UN high/low aliases and sparse document fields', () => {
+  it("preserves UN high/low aliases and sparse document fields", () => {
     const doc = parseXml<Record<string, unknown>>(`
       <CONSOLIDATED_LIST><INDIVIDUALS><INDIVIDUAL>
         <DATAID>67890</DATAID><FIRST_NAME>PUBLIC</FIRST_NAME><SECOND_NAME>EXAMPLE</SECOND_NAME>
@@ -371,41 +435,43 @@ describe('sanctions parser sparsity and alias quality', () => {
     `);
     const [designation] = parseUn(doc);
     expect(designation?.payload.aliases).toEqual([
-      { name: 'Public Alias', nameType: 'aka' },
-      { name: 'P. Example', nameType: 'low-quality-aka' },
+      { name: "Public Alias", nameType: "aka" },
+      { name: "P. Example", nameType: "low-quality-aka" },
     ]);
-    expect(designation?.payload.identifiers).toEqual([{ type: 'Passport', value: 'X1' }]);
+    expect(designation?.payload.identifiers).toEqual([
+      { type: "Passport", value: "X1" },
+    ]);
     expect(designation?.payload.addresses).toEqual([]);
     expect(designation?.payload.datesOfBirth).toEqual([]);
   });
 
-  it('normalizes a sparse OFAC standard entry carrying only a uid and a surname', () => {
+  it("normalizes a sparse OFAC standard entry carrying only a uid and a surname", () => {
     const [designation] = parseOfac(
       parseXml(
-        '<sdnList><sdnEntry><uid>777</uid><lastName>SOLENAME</lastName></sdnEntry></sdnList>',
+        "<sdnList><sdnEntry><uid>777</uid><lastName>SOLENAME</lastName></sdnEntry></sdnList>",
       ),
-      'ofac_sdn',
+      "ofac_sdn",
     );
     expect(designation).toMatchObject({
-      id: 'ofac_sdn:777',
-      sourceEntryId: '777',
-      primaryName: 'SOLENAME',
-      entityType: 'unknown',
+      id: "ofac_sdn:777",
+      sourceEntryId: "777",
+      primaryName: "SOLENAME",
+      entityType: "unknown",
     });
   });
 
-  it('drops entries whose source published no stable identifier', () => {
+  it("drops entries whose source published no stable identifier", () => {
     const ofacStandard = parseOfac(
       parseXml(
-        '<sdnList><sdnEntry><firstName>No</firstName><lastName>Uid</lastName></sdnEntry></sdnList>',
+        "<sdnList><sdnEntry><firstName>No</firstName><lastName>Uid</lastName></sdnEntry></sdnList>",
       ),
-      'ofac_sdn',
+      "ofac_sdn",
     );
     const ofacAdvanced = parseOfac(
       parseXml(
         '<Sanctions><DistinctParties><DistinctParty><Profile><Identity><Alias Primary="true"><DocumentedName><DocumentedNamePart><NamePartValue>No Ref</NamePartValue></DocumentedNamePart></DocumentedName></Alias></Identity></Profile></DistinctParty></DistinctParties></Sanctions>',
       ),
-      'ofac_sdn',
+      "ofac_sdn",
     );
     const eu = parseEu(
       parseXml(
@@ -414,12 +480,12 @@ describe('sanctions parser sparsity and alias quality', () => {
     );
     const uk = parseUk(
       parseXml(
-        '<Designations><Designation><Names><Name><Name6>Acme Ltd</Name6></Name></Names></Designation></Designations>',
+        "<Designations><Designation><Names><Name><Name6>Acme Ltd</Name6></Name></Names></Designation></Designations>",
       ),
     );
     const un = parseUn(
       parseXml(
-        '<CONSOLIDATED_LIST><ENTITIES><ENTITY><FIRST_NAME>ACME UN</FIRST_NAME></ENTITY></ENTITIES></CONSOLIDATED_LIST>',
+        "<CONSOLIDATED_LIST><ENTITIES><ENTITY><FIRST_NAME>ACME UN</FIRST_NAME></ENTITY></ENTITIES></CONSOLIDATED_LIST>",
       ),
     );
     expect({ ofacStandard, ofacAdvanced, eu, uk, un }).toEqual({
@@ -431,15 +497,15 @@ describe('sanctions parser sparsity and alias quality', () => {
     });
   });
 
-  it('drops a name that decoded to a replacement character, and keeps it out of the aliases', () => {
+  it("drops a name that decoded to a replacement character, and keeps it out of the aliases", () => {
     // What a lossy UTF-8 decode leaves behind for the invalid byte pair `c3 28`.
-    const undecodable = '\uFFFD(';
+    const undecodable = "\uFFFD(";
     expect(
       parseOfac(
         parseXml(
           `<sdnList><sdnEntry><uid>801</uid><lastName>${undecodable}</lastName></sdnEntry></sdnList>`,
         ),
-        'ofac_sdn',
+        "ofac_sdn",
       ),
     ).toHaveLength(0);
 
@@ -447,30 +513,35 @@ describe('sanctions parser sparsity and alias quality', () => {
       parseXml(
         `<sdnList><sdnEntry><uid>802</uid><lastName>Readable Co</lastName><akaList><aka><lastName>${undecodable}</lastName></aka><aka><lastName>Readable Trading</lastName></aka></akaList></sdnEntry></sdnList>`,
       ),
-      'ofac_sdn',
+      "ofac_sdn",
     );
-    expect(designation?.payload.aliases).toEqual([{ name: 'Readable Trading', nameType: 'aka' }]);
+    expect(designation?.payload.aliases).toEqual([
+      { name: "Readable Trading", nameType: "aka" },
+    ]);
   });
 
   it('drops nameless OFAC standard and GLEIF entries instead of naming them "Unknown"', () => {
     expect(
-      parseOfac(parseXml('<sdnList><sdnEntry><uid>42</uid></sdnEntry></sdnList>'), 'ofac_sdn'),
+      parseOfac(
+        parseXml("<sdnList><sdnEntry><uid>42</uid></sdnEntry></sdnList>"),
+        "ofac_sdn",
+      ),
     ).toEqual([]);
     expect(
       parseLeiLevel1(
         parseXml(
-          '<LEIData><LEIRecords><LEIRecord><LEI>5493001KJTIIGC8Y1R12</LEI><Entity/></LEIRecord></LEIRecords></LEIData>',
+          "<LEIData><LEIRecords><LEIRecord><LEI>5493001KJTIIGC8Y1R12</LEI><Entity/></LEIRecord></LEIRecords></LEIData>",
         ),
       ),
     ).toEqual([]);
   });
 
-  it('drops nameless OFAC advanced, EU, UK, and UN entries', () => {
+  it("drops nameless OFAC advanced, EU, UK, and UN entries", () => {
     const ofac = parseOfac(
       parseXml(
         '<Sanctions><DistinctParties><DistinctParty FixedRef="1"><Profile/></DistinctParty></DistinctParties></Sanctions>',
       ),
-      'ofac_sdn',
+      "ofac_sdn",
     );
     const eu = parseEu(
       parseXml(
@@ -478,11 +549,13 @@ describe('sanctions parser sparsity and alias quality', () => {
       ),
     );
     const uk = parseUk(
-      parseXml('<Designations><Designation><UniqueID>1</UniqueID></Designation></Designations>'),
+      parseXml(
+        "<Designations><Designation><UniqueID>1</UniqueID></Designation></Designations>",
+      ),
     );
     const un = parseUn(
       parseXml(
-        '<CONSOLIDATED_LIST><INDIVIDUALS><INDIVIDUAL><DATAID>1</DATAID></INDIVIDUAL></INDIVIDUALS></CONSOLIDATED_LIST>',
+        "<CONSOLIDATED_LIST><INDIVIDUALS><INDIVIDUAL><DATAID>1</DATAID></INDIVIDUAL></INDIVIDUALS></CONSOLIDATED_LIST>",
       ),
     );
     expect({ ofac, eu, uk, un }).toEqual({ ofac: [], eu: [], uk: [], un: [] });
@@ -720,44 +793,56 @@ function withDeferred(
     return {
       ...record,
       ...(fields?.program ? { program: fields.program } : {}),
-      ...(fields?.designationDate ? { designationDate: fields.designationDate } : {}),
+      ...(fields?.designationDate
+        ? { designationDate: fields.designationDate }
+        : {}),
     };
   });
 }
 
-describe('sanctions streaming ingest — equivalence with the buffered parsers', () => {
-  it('OFAC advanced: streamed records match, once the deferred programme join lands', async () => {
+describe("sanctions streaming ingest — equivalence with the buffered parsers", () => {
+  it("OFAC advanced: streamed records match, once the deferred programme join lands", async () => {
     const rejections = createRejections();
-    const oracle = parseOfac(parseXml(MULTI_OFAC_ADVANCED_XML), 'ofac_sdn', rejections);
-    expect(oracle.map((d) => d.sourceEntryId)).toEqual(['2674', '4238']);
-    expect(oracle[0]?.program).toBe('SDGT, SDT');
+    const oracle = parseOfac(
+      parseXml(MULTI_OFAC_ADVANCED_XML),
+      "ofac_sdn",
+      rejections,
+    );
+    expect(oracle.map((d) => d.sourceEntryId)).toEqual(["2674", "4238"]);
+    expect(oracle[0]?.program).toBe("SDGT, SDT");
     // The second entry for profile 2674 publishes only a date, so it overrides
     // the date and leaves the earlier programme in place.
-    expect(oracle[0]?.designationDate).toBe('2001-09-11');
+    expect(oracle[0]?.designationDate).toBe("2001-09-11");
     expect(rejections).toEqual({ missingIdentifier: 1, unusableName: 1 });
 
     for (const size of CHUNK_SIZES) {
       const { records, state } = await streamAll(
-        (chunks, s) => streamOfacFromText(chunks, 'ofac_sdn', s),
+        (chunks, s) => streamOfacFromText(chunks, "ofac_sdn", s),
         MULTI_OFAC_ADVANCED_XML,
         size,
       );
-      expect(withDeferred(records, state), `chunk size ${size}`).toEqual(oracle);
+      expect(withDeferred(records, state), `chunk size ${size}`).toEqual(
+        oracle,
+      );
       expect(state.rejections, `chunk size ${size}`).toEqual(rejections);
       // The orphan programme entry is carried, and patches nothing downstream.
-      expect(state.deferredFields.get('99999')).toEqual({ program: 'ORPHAN' });
+      expect(state.deferredFields.get("99999")).toEqual({ program: "ORPHAN" });
     }
   });
 
-  it('OFAC standard: streamed records match the buffered parse', async () => {
+  it("OFAC standard: streamed records match the buffered parse", async () => {
     const rejections = createRejections();
-    const oracle = parseOfac(parseXml(MULTI_OFAC_STANDARD_XML), 'ofac_sdn', rejections);
-    expect(oracle.map((d) => d.sourceEntryId)).toEqual(['12345', '778']);
+    const oracle = parseOfac(
+      parseXml(MULTI_OFAC_STANDARD_XML),
+      "ofac_sdn",
+      rejections,
+    );
+    expect(oracle.map((d) => d.sourceEntryId)).toEqual(["12345", "778"]);
     expect(rejections).toEqual({ missingIdentifier: 1, unusableName: 1 });
 
     for (const size of CHUNK_SIZES) {
       const { records, state } = await streamAll(
-        (chunks, s) => streamOfacFromText(chunks, 'ofac_sdn', s),
+        (chunks, s) => streamOfacFromText(chunks, "ofac_sdn", s),
         MULTI_OFAC_STANDARD_XML,
         size,
       );
@@ -768,16 +853,24 @@ describe('sanctions streaming ingest — equivalence with the buffered parsers',
   });
 
   it.each([
-    ['EU', MULTI_EU_XML, parseEu, streamEuFromText, ['13', 'EU.99.9']],
-    ['UK', MULTI_UK_XML, parseUk, streamUkFromText, ['AFG0001', 'UK-GRP-2']],
-    ['UN', MULTI_UN_XML, parseUn, streamUnFromText, ['6907993', '6908100', 'UN-REF-9']],
+    ["EU", MULTI_EU_XML, parseEu, streamEuFromText, ["13", "EU.99.9"]],
+    ["UK", MULTI_UK_XML, parseUk, streamUkFromText, ["AFG0001", "UK-GRP-2"]],
+    [
+      "UN",
+      MULTI_UN_XML,
+      parseUn,
+      streamUnFromText,
+      ["6907993", "6908100", "UN-REF-9"],
+    ],
   ] as const)(
-    '%s: streamed records match the buffered parse across chunk boundaries',
+    "%s: streamed records match the buffered parse across chunk boundaries",
     async (_label, xml, parse, stream, expectedIds) => {
       const rejections = createRejections();
       const oracle = parse(parseXml(xml), rejections);
       expect(oracle.map((d) => d.sourceEntryId)).toEqual(expectedIds);
-      expect(rejections.missingIdentifier + rejections.unusableName).toBeGreaterThan(0);
+      expect(
+        rejections.missingIdentifier + rejections.unusableName,
+      ).toBeGreaterThan(0);
 
       for (const size of CHUNK_SIZES) {
         const { records, state } = await streamAll(stream, xml, size);
@@ -788,25 +881,32 @@ describe('sanctions streaming ingest — equivalence with the buffered parsers',
   );
 });
 
-describe('sanctions streaming ingest — document boundaries', () => {
+describe("sanctions streaming ingest — document boundaries", () => {
   it.each([
-    ['EU', streamEuFromText, '<export></export>'],
+    ["EU", streamEuFromText, "<export></export>"],
     [
-      'UK',
+      "UK",
       streamUkFromText,
-      '<Designations><DateGenerated>10/06/2026</DateGenerated></Designations>',
+      "<Designations><DateGenerated>10/06/2026</DateGenerated></Designations>",
     ],
-    ['UN', streamUnFromText, '<CONSOLIDATED_LIST><INDIVIDUALS/><ENTITIES/></CONSOLIDATED_LIST>'],
-  ] as const)('%s: an empty document yields nothing', async (_label, stream, xml) => {
-    for (const size of [1, 4, 1_000_000]) {
-      expect((await streamAll(stream, xml, size)).records).toHaveLength(0);
-    }
-  });
+    [
+      "UN",
+      streamUnFromText,
+      "<CONSOLIDATED_LIST><INDIVIDUALS/><ENTITIES/></CONSOLIDATED_LIST>",
+    ],
+  ] as const)(
+    "%s: an empty document yields nothing",
+    async (_label, stream, xml) => {
+      for (const size of [1, 4, 1_000_000]) {
+        expect((await streamAll(stream, xml, size)).records).toHaveLength(0);
+      }
+    },
+  );
 
-  it('an empty OFAC document yields nothing and defers nothing', async () => {
+  it("an empty OFAC document yields nothing and defers nothing", async () => {
     const { records, state } = await streamAll(
-      (chunks, s) => streamOfacFromText(chunks, 'ofac_sdn', s),
-      '<Sanctions><ReferenceValueSets/><DistinctParties/><SanctionsEntries/></Sanctions>',
+      (chunks, s) => streamOfacFromText(chunks, "ofac_sdn", s),
+      "<Sanctions><ReferenceValueSets/><DistinctParties/><SanctionsEntries/></Sanctions>",
       4,
     );
     expect(records).toHaveLength(0);
@@ -814,7 +914,7 @@ describe('sanctions streaming ingest — document boundaries', () => {
     expect(state.rejections).toEqual({ missingIdentifier: 0, unusableName: 0 });
   });
 
-  it('a single record with no siblings is emitted whole', async () => {
+  it("a single record with no siblings is emitted whole", async () => {
     const xml =
       '<export><sanctionEntity logicalId="solo"><subjectType code="person"/><nameAlias wholeName="Solo Person"/></sanctionEntity></export>';
     for (const size of [1, 5, 1_000_000]) {
@@ -822,43 +922,50 @@ describe('sanctions streaming ingest — document boundaries', () => {
       expect(
         records.map((d) => d.primaryName),
         `chunk size ${size}`,
-      ).toEqual(['Solo Person']);
+      ).toEqual(["Solo Person"]);
     }
   });
 
-  it('drops a truncated trailing record but keeps the complete ones before it', async () => {
-    const truncated = `${MULTI_EU_XML.slice(0, MULTI_EU_XML.indexOf('<sanctionEntity euReferenceNumber'))}<sanctionEntity logicalId="cut"><nameAlias wholeName="Never Clo`;
+  it("drops a truncated trailing record but keeps the complete ones before it", async () => {
+    const truncated = `${MULTI_EU_XML.slice(0, MULTI_EU_XML.indexOf("<sanctionEntity euReferenceNumber"))}<sanctionEntity logicalId="cut"><nameAlias wholeName="Never Clo`;
     for (const size of [1, 9, 1_000_000]) {
       const { records } = await streamAll(streamEuFromText, truncated, size);
       expect(
         records.map((d) => d.sourceEntryId),
         `chunk size ${size}`,
-      ).toEqual(['13']);
+      ).toEqual(["13"]);
     }
   });
 
-  it('drops an OFAC party whose closing tag never arrives', async () => {
+  it("drops an OFAC party whose closing tag never arrives", async () => {
     const cut = MULTI_OFAC_ADVANCED_XML.slice(
       0,
-      MULTI_OFAC_ADVANCED_XML.indexOf('<DistinctParty>'),
+      MULTI_OFAC_ADVANCED_XML.indexOf("<DistinctParty>"),
     );
     const { records, state } = await streamAll(
-      (chunks, s) => streamOfacFromText(chunks, 'ofac_sdn', s),
+      (chunks, s) => streamOfacFromText(chunks, "ofac_sdn", s),
       `${cut}<DistinctParty FixedRef="9"><Profile ID="9"`,
       7,
     );
-    expect(records.map((d) => d.sourceEntryId)).toEqual(['2674']);
+    expect(records.map((d) => d.sourceEntryId)).toEqual(["2674"]);
     // Truncation is not a rejection — the record was never seen whole.
     expect(state.rejections).toEqual({ missingIdentifier: 0, unusableName: 0 });
   });
 
-  it('never mistakes a container element for the record it contains', async () => {
+  it("never mistakes a container element for the record it contains", async () => {
     // <DistinctParties>, <SanctionsEntries>, <INDIVIDUALS>, <ENTITIES>, and the
     // <Designations> root all prefix a record name they must not match.
     const { records } = await streamAll(streamUnFromText, MULTI_UN_XML, 3);
-    expect(records.map((d) => d.entityType)).toEqual(['person', 'organization', 'organization']);
+    expect(records.map((d) => d.entityType)).toEqual([
+      "person",
+      "organization",
+      "organization",
+    ]);
     const uk = await streamAll(streamUkFromText, MULTI_UK_XML, 3);
-    expect(uk.records.map((d) => d.sourceEntryId)).toEqual(['AFG0001', 'UK-GRP-2']);
+    expect(uk.records.map((d) => d.sourceEntryId)).toEqual([
+      "AFG0001",
+      "UK-GRP-2",
+    ]);
   });
 });
 
@@ -900,35 +1007,35 @@ const LEI_L2_XML = `<?xml version="1.0" encoding="UTF-8"?>
   </RelationshipRecords>
 </RelationshipData>`;
 
-describe('GLEIF Level 1 parser', () => {
-  it('normalizes an LEI record', () => {
+describe("GLEIF Level 1 parser", () => {
+  it("normalizes an LEI record", () => {
     const doc = parseXml<Record<string, unknown>>(LEI_L1_XML);
     const entities = parseLeiLevel1(doc);
     expect(entities).toHaveLength(1);
     const e = entities[0]!;
-    expect(e.lei).toBe('5493001KJTIIGC8Y1R12');
-    expect(e.legalName).toBe('Fictional Trading Company LLC');
-    expect(e.jurisdiction).toBe('US');
-    expect(e.status).toBe('ISSUED');
-    expect(e.legalAddress).toContain('99 Commerce Way');
+    expect(e.lei).toBe("5493001KJTIIGC8Y1R12");
+    expect(e.legalName).toBe("Fictional Trading Company LLC");
+    expect(e.jurisdiction).toBe("US");
+    expect(e.status).toBe("ISSUED");
+    expect(e.legalAddress).toContain("99 Commerce Way");
   });
 });
 
-describe('GLEIF Level 2 parser', () => {
-  it('normalizes a relationship record', () => {
+describe("GLEIF Level 2 parser", () => {
+  it("normalizes a relationship record", () => {
     const doc = parseXml<Record<string, unknown>>(LEI_L2_XML);
     const rels = parseLeiLevel2(doc);
     expect(rels).toHaveLength(1);
     const r = rels[0]!;
-    expect(r.childLei).toBe('5493001KJTIIGC8Y1R12');
-    expect(r.parentLei).toBe('529900T8BM49AURSDO55');
-    expect(r.relationshipType).toBe('IS_ULTIMATELY_CONSOLIDATED_BY');
-    expect(r.relationshipStatus).toBe('ACTIVE');
+    expect(r.childLei).toBe("5493001KJTIIGC8Y1R12");
+    expect(r.parentLei).toBe("529900T8BM49AURSDO55");
+    expect(r.relationshipType).toBe("IS_ULTIMATELY_CONSOLIDATED_BY");
+    expect(r.relationshipStatus).toBe("ACTIVE");
   });
 
-  it('returns an empty array for a document with no relationship records', () => {
+  it("returns an empty array for a document with no relationship records", () => {
     const doc = parseXml<Record<string, unknown>>(
-      '<RelationshipData><RelationshipRecords></RelationshipRecords></RelationshipData>',
+      "<RelationshipData><RelationshipRecords></RelationshipRecords></RelationshipData>",
     );
     expect(parseLeiLevel2(doc)).toHaveLength(0);
   });
@@ -1031,66 +1138,79 @@ const RR_L2_FULLY_PREFIXED_XML = `<?xml version="1.0" encoding="UTF-8"?>
   </rr:RelationshipRecords>
 </rr:RelationshipData>`;
 
-describe('GLEIF namespace-prefixed corpus (issue #7)', () => {
+describe("GLEIF namespace-prefixed corpus (issue #7)", () => {
   it('DOM parseLeiLevel1 yields complete records with real legal names (never "Unknown")', () => {
     const entities = parseLeiLevel1(parseXml(LEI_L1_FULLY_PREFIXED_XML));
     expect(entities).toHaveLength(3);
-    expect(entities.every((e) => e.legalName !== 'Unknown')).toBe(true);
+    expect(entities.every((e) => e.legalName !== "Unknown")).toBe(true);
 
-    const full = entities.find((e) => e.lei === '5493001KJTIIGC8Y1R12')!;
-    expect(full.legalName).toBe('Fictional Trading Company LLC');
-    expect(full.otherNames).toEqual(['Fictional Trading Co', 'FTC LLC']);
-    expect(full.jurisdiction).toBe('US');
-    expect(full.status).toBe('ISSUED');
-    expect(full.legalAddress).toContain('99 Commerce Way');
-    expect(full.headquartersAddress).toContain('1 HQ Plaza');
-    expect(full.registrationAuthorityId).toBe('RA000665');
-    expect(full.lastUpdate).toBe('2026-01-15T10:00:00Z');
+    const full = entities.find((e) => e.lei === "5493001KJTIIGC8Y1R12")!;
+    expect(full.legalName).toBe("Fictional Trading Company LLC");
+    expect(full.otherNames).toEqual(["Fictional Trading Co", "FTC LLC"]);
+    expect(full.jurisdiction).toBe("US");
+    expect(full.status).toBe("ISSUED");
+    expect(full.legalAddress).toContain("99 Commerce Way");
+    expect(full.headquartersAddress).toContain("1 HQ Plaza");
+    expect(full.registrationAuthorityId).toBe("RA000665");
+    expect(full.lastUpdate).toBe("2026-01-15T10:00:00Z");
 
     // xml:lang on the name element (folded to `lang` by removeNSPrefix) doesn't
     // disturb the multibyte legal-name text read.
-    expect(entities.find((e) => e.lei === '529900T8BM49AURSDO55')?.legalName).toBe(
-      'Société Générale Placement SA',
-    );
+    expect(
+      entities.find((e) => e.lei === "529900T8BM49AURSDO55")?.legalName,
+    ).toBe("Société Générale Placement SA");
     // Sparse record: status falls back to EntityStatus when Registration is absent.
-    expect(entities.find((e) => e.lei === '213800MINIMAL00000X1')?.status).toBe('ACTIVE');
+    expect(entities.find((e) => e.lei === "213800MINIMAL00000X1")?.status).toBe(
+      "ACTIVE",
+    );
   });
 
-  it('DOM parseLeiLevel2 retains relationships with correct child/parent LEIs', () => {
+  it("DOM parseLeiLevel2 retains relationships with correct child/parent LEIs", () => {
     const rels = parseLeiLevel2(parseXml(RR_L2_FULLY_PREFIXED_XML));
     expect(rels).toHaveLength(2);
 
-    const ultimate = rels.find((r) => r.relationshipType === 'IS_ULTIMATELY_CONSOLIDATED_BY')!;
-    expect(ultimate.childLei).toBe('5493001KJTIIGC8Y1R12');
-    expect(ultimate.parentLei).toBe('529900T8BM49AURSDO55');
-    expect(ultimate.relationshipStatus).toBe('ACTIVE');
-    expect(ultimate.relationshipPeriod).toBe('2020-01-01T00:00:00Z');
+    const ultimate = rels.find(
+      (r) => r.relationshipType === "IS_ULTIMATELY_CONSOLIDATED_BY",
+    )!;
+    expect(ultimate.childLei).toBe("5493001KJTIIGC8Y1R12");
+    expect(ultimate.parentLei).toBe("529900T8BM49AURSDO55");
+    expect(ultimate.relationshipStatus).toBe("ACTIVE");
+    expect(ultimate.relationshipPeriod).toBe("2020-01-01T00:00:00Z");
 
-    const direct = rels.find((r) => r.relationshipType === 'IS_DIRECTLY_CONSOLIDATED_BY')!;
-    expect(direct.childLei).toBe('213800MINIMAL00000X1');
-    expect(direct.parentLei).toBe('529900T8BM49AURSDO55');
+    const direct = rels.find(
+      (r) => r.relationshipType === "IS_DIRECTLY_CONSOLIDATED_BY",
+    )!;
+    expect(direct.childLei).toBe("213800MINIMAL00000X1");
+    expect(direct.parentLei).toBe("529900T8BM49AURSDO55");
   });
 
-  it('parses to ZERO records when namespace prefixes are preserved (the pre-fix failure mode)', () => {
+  it("parses to ZERO records when namespace prefixes are preserved (the pre-fix failure mode)", () => {
     // The GLEIF counterpart to the OFAC/EU attribute guards above: with prefixes
     // preserved, every element key stays `lei:`/`rr:`-prefixed, so the unprefixed
     // reads reach nothing and the record lists come back empty — exactly the bug
     // that `removeNSPrefix` fixes.
-    const { XMLParser } = require('fast-xml-parser');
-    const nsPreserved = new XMLParser({ ignoreAttributes: false, processEntities: false });
-    expect(parseLeiLevel1(nsPreserved.parse(LEI_L1_FULLY_PREFIXED_XML))).toHaveLength(0);
-    expect(parseLeiLevel2(nsPreserved.parse(RR_L2_FULLY_PREFIXED_XML))).toHaveLength(0);
+    const { XMLParser } = require("fast-xml-parser");
+    const nsPreserved = new XMLParser({
+      ignoreAttributes: false,
+      processEntities: false,
+    });
+    expect(
+      parseLeiLevel1(nsPreserved.parse(LEI_L1_FULLY_PREFIXED_XML)),
+    ).toHaveLength(0);
+    expect(
+      parseLeiLevel2(nsPreserved.parse(RR_L2_FULLY_PREFIXED_XML)),
+    ).toHaveLength(0);
   });
 });
 
 // ─── GLEIF download decompression (ZIP / gzip / plain) ──────────────────────────
 
-describe('decompressGleifBuffer', () => {
-  it('extracts the XML entry from a ZIP container (the golden-copy format)', () => {
+describe("decompressGleifBuffer", () => {
+  it("extracts the XML entry from a ZIP container (the golden-copy format)", () => {
     // Build a minimal ZIP (stored, no compression) wrapping one XML file, by hand:
     // local file header + filename + data + central directory + EOCD.
-    const name = Buffer.from('lei.xml');
-    const data = Buffer.from('<LEIData/>');
+    const name = Buffer.from("lei.xml");
+    const data = Buffer.from("<LEIData/>");
     const crc = 0; // stored entries still carry a CRC field; value is not validated here
     const lfh = Buffer.alloc(30);
     lfh.writeUInt32LE(0x04034b50, 0); // local file header signature
@@ -1101,11 +1221,11 @@ describe('decompressGleifBuffer', () => {
     lfh.writeUInt16LE(name.length, 26);
     lfh.writeUInt16LE(0, 28);
     const zip = Buffer.concat([lfh, name, data]);
-    expect(decompressGleifBuffer(zip)).toBe('<LEIData/>');
+    expect(decompressGleifBuffer(zip)).toBe("<LEIData/>");
   });
 
-  it('passes through plain XML unchanged', () => {
-    expect(decompressGleifBuffer(Buffer.from('<LEIData/>'))).toBe('<LEIData/>');
+  it("passes through plain XML unchanged", () => {
+    expect(decompressGleifBuffer(Buffer.from("<LEIData/>"))).toBe("<LEIData/>");
   });
 });
 
@@ -1197,7 +1317,10 @@ async function* chunkStr(s: string, size: number): AsyncGenerator<string> {
   for (let i = 0; i < s.length; i += size) yield s.slice(i, i + size);
 }
 
-async function* chunkBytes(b: Uint8Array, size: number): AsyncGenerator<Uint8Array> {
+async function* chunkBytes(
+  b: Uint8Array,
+  size: number,
+): AsyncGenerator<Uint8Array> {
   for (let i = 0; i < b.length; i += size) yield b.subarray(i, i + size);
 }
 
@@ -1212,7 +1335,7 @@ async function collect<T>(gen: AsyncIterable<T>): Promise<T[]> {
  *  the local header reports size 0 and a data descriptor + central directory
  *  trail the deflate stream. */
 function buildDeflateZip(data: Buffer): Buffer {
-  const name = Buffer.from('lei.xml');
+  const name = Buffer.from("lei.xml");
   const deflated = deflateRawSync(data);
   const lfh = Buffer.alloc(30);
   lfh.writeUInt32LE(0x04034b50, 0); // local file header signature
@@ -1231,36 +1354,46 @@ function buildDeflateZip(data: Buffer): Buffer {
   return Buffer.concat([lfh, name, deflated, dd, cd]);
 }
 
-describe('GLEIF streaming L1 — equivalence with the DOM parser', () => {
-  it('emits identical records across awkward text chunk sizes', async () => {
+describe("GLEIF streaming L1 — equivalence with the DOM parser", () => {
+  it("emits identical records across awkward text chunk sizes", async () => {
     const oracle = parseLeiLevel1(parseXml(MULTI_L1_XML));
     expect(oracle.length).toBe(3);
     for (const size of [1, 3, 7, 64, 100_000]) {
-      const streamed = await collect(streamLeiLevel1FromText(chunkStr(MULTI_L1_XML, size)));
+      const streamed = await collect(
+        streamLeiLevel1FromText(chunkStr(MULTI_L1_XML, size)),
+      );
       expect(streamed, `chunk size ${size}`).toEqual(oracle);
     }
   });
 
-  it('emits identical records through gzip, ZIP-deflate, and plain byte streams', async () => {
+  it("emits identical records through gzip, ZIP-deflate, and plain byte streams", async () => {
     const oracle = parseLeiLevel1(parseXml(MULTI_L1_XML));
-    const xml = Buffer.from(MULTI_L1_XML, 'utf8');
-    expect(await collect(streamLeiLevel1FromBytes(chunkBytes(gzipSync(xml), 16)))).toEqual(oracle);
-    expect(await collect(streamLeiLevel1FromBytes(chunkBytes(buildDeflateZip(xml), 16)))).toEqual(
-      oracle,
-    );
+    const xml = Buffer.from(MULTI_L1_XML, "utf8");
+    expect(
+      await collect(streamLeiLevel1FromBytes(chunkBytes(gzipSync(xml), 16))),
+    ).toEqual(oracle);
+    expect(
+      await collect(
+        streamLeiLevel1FromBytes(chunkBytes(buildDeflateZip(xml), 16)),
+      ),
+    ).toEqual(oracle);
     // Plain XML at 1-byte chunks splits every multi-byte UTF-8 character across the
     // streaming TextDecoder boundary.
-    expect(await collect(streamLeiLevel1FromBytes(chunkBytes(xml, 1)))).toEqual(oracle);
+    expect(await collect(streamLeiLevel1FromBytes(chunkBytes(xml, 1)))).toEqual(
+      oracle,
+    );
   });
 
-  it('extracts a lei:-prefixed record tag', async () => {
-    const streamed = await collect(streamLeiLevel1FromText(chunkStr(LEI_L1_PREFIXED_XML, 5)));
+  it("extracts a lei:-prefixed record tag", async () => {
+    const streamed = await collect(
+      streamLeiLevel1FromText(chunkStr(LEI_L1_PREFIXED_XML, 5)),
+    );
     expect(streamed).toHaveLength(1);
-    expect(streamed[0]?.lei).toBe('PREFIX0000000000000X');
-    expect(streamed[0]?.legalName).toBe('Prefixed Record Co');
+    expect(streamed[0]?.lei).toBe("PREFIX0000000000000X");
+    expect(streamed[0]?.legalName).toBe("Prefixed Record Co");
   });
 
-  it('emits records identical to the DOM parser on the fully namespace-prefixed corpus', async () => {
+  it("emits records identical to the DOM parser on the fully namespace-prefixed corpus", async () => {
     const oracle = parseLeiLevel1(parseXml(LEI_L1_FULLY_PREFIXED_XML));
     expect(oracle).toHaveLength(3);
     for (const size of [1, 5, 64, 100_000]) {
@@ -1270,35 +1403,43 @@ describe('GLEIF streaming L1 — equivalence with the DOM parser', () => {
       expect(streamed, `chunk size ${size}`).toEqual(oracle);
     }
     // …and decompressed from a ZIP-deflate byte stream (the golden-copy container).
-    const zip = buildDeflateZip(Buffer.from(LEI_L1_FULLY_PREFIXED_XML, 'utf8'));
-    expect(await collect(streamLeiLevel1FromBytes(chunkBytes(zip, 16)))).toEqual(oracle);
+    const zip = buildDeflateZip(Buffer.from(LEI_L1_FULLY_PREFIXED_XML, "utf8"));
+    expect(
+      await collect(streamLeiLevel1FromBytes(chunkBytes(zip, 16))),
+    ).toEqual(oracle);
   });
 });
 
-describe('GLEIF streaming L2 — equivalence with the DOM parser', () => {
-  it('emits identical records across awkward text chunk sizes', async () => {
+describe("GLEIF streaming L2 — equivalence with the DOM parser", () => {
+  it("emits identical records across awkward text chunk sizes", async () => {
     const oracle = parseLeiLevel2(parseXml(MULTI_L2_XML));
     expect(oracle.length).toBe(2);
     for (const size of [1, 3, 7, 64, 100_000]) {
-      const streamed = await collect(streamLeiLevel2FromText(chunkStr(MULTI_L2_XML, size)));
+      const streamed = await collect(
+        streamLeiLevel2FromText(chunkStr(MULTI_L2_XML, size)),
+      );
       expect(streamed, `chunk size ${size}`).toEqual(oracle);
     }
   });
 
-  it('emits identical records through a ZIP-deflate byte stream', async () => {
+  it("emits identical records through a ZIP-deflate byte stream", async () => {
     const oracle = parseLeiLevel2(parseXml(MULTI_L2_XML));
-    const zip = buildDeflateZip(Buffer.from(MULTI_L2_XML, 'utf8'));
-    expect(await collect(streamLeiLevel2FromBytes(chunkBytes(zip, 16)))).toEqual(oracle);
+    const zip = buildDeflateZip(Buffer.from(MULTI_L2_XML, "utf8"));
+    expect(
+      await collect(streamLeiLevel2FromBytes(chunkBytes(zip, 16))),
+    ).toEqual(oracle);
   });
 
-  it('extracts an rr:-prefixed record tag', async () => {
-    const streamed = await collect(streamLeiLevel2FromText(chunkStr(RR_L2_PREFIXED_XML, 5)));
+  it("extracts an rr:-prefixed record tag", async () => {
+    const streamed = await collect(
+      streamLeiLevel2FromText(chunkStr(RR_L2_PREFIXED_XML, 5)),
+    );
     expect(streamed).toHaveLength(1);
-    expect(streamed[0]?.childLei).toBe('PREFIX0000000000000X');
-    expect(streamed[0]?.relationshipType).toBe('IS_DIRECTLY_CONSOLIDATED_BY');
+    expect(streamed[0]?.childLei).toBe("PREFIX0000000000000X");
+    expect(streamed[0]?.relationshipType).toBe("IS_DIRECTLY_CONSOLIDATED_BY");
   });
 
-  it('emits records identical to the DOM parser on the fully namespace-prefixed corpus', async () => {
+  it("emits records identical to the DOM parser on the fully namespace-prefixed corpus", async () => {
     const oracle = parseLeiLevel2(parseXml(RR_L2_FULLY_PREFIXED_XML));
     expect(oracle).toHaveLength(2);
     for (const size of [1, 5, 64, 100_000]) {
@@ -1307,14 +1448,19 @@ describe('GLEIF streaming L2 — equivalence with the DOM parser', () => {
       );
       expect(streamed, `chunk size ${size}`).toEqual(oracle);
     }
-    const zip = buildDeflateZip(Buffer.from(RR_L2_FULLY_PREFIXED_XML, 'utf8'));
-    expect(await collect(streamLeiLevel2FromBytes(chunkBytes(zip, 16)))).toEqual(oracle);
+    const zip = buildDeflateZip(Buffer.from(RR_L2_FULLY_PREFIXED_XML, "utf8"));
+    expect(
+      await collect(streamLeiLevel2FromBytes(chunkBytes(zip, 16))),
+    ).toEqual(oracle);
   });
 
-  it('yields nothing for a document with only the empty container', async () => {
+  it("yields nothing for a document with only the empty container", async () => {
     const streamed = await collect(
       streamLeiLevel2FromText(
-        chunkStr('<RelationshipData><RelationshipRecords/></RelationshipData>', 4),
+        chunkStr(
+          "<RelationshipData><RelationshipRecords/></RelationshipData>",
+          4,
+        ),
       ),
     );
     expect(streamed).toHaveLength(0);

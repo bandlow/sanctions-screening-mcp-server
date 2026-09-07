@@ -32,7 +32,7 @@ await createApp({
   resources: allResourceDefinitions,
   prompts: allPromptDefinitions,
   instructions:
-    'Screen names against the consolidated OFAC, EU, UK, and UN sanctions lists and resolve legal entities against GLEIF, all fuzzy-matched offline over a local mirror. Start with sanctions_screen_name for "is this entity on a watchlist"; sanctions_resolve_entity → sanctions_get_entity → sanctions_trace_ownership for "who is this legal entity and who owns it." Every result is a screening AID, not a compliance determination — a hit is a candidate to verify against the official source, and an empty result is never a clearance. Check sanctions_list_sources for which lists are loaded and how fresh the mirror is.',
+    'Screen names against consolidated OFAC, EU, UK, UN, and BIS export-control watchlists and resolve legal entities against GLEIF, all fuzzy-matched offline over a local mirror. Start with sanctions_screen_name for "is this entity on a watchlist"; sanctions_resolve_entity → sanctions_get_entity → sanctions_trace_ownership for "who is this legal entity and who owns it." Every result is a screening AID, not a compliance determination — a hit is a candidate to verify against the official source, and an empty result is never a clearance. Check sanctions_list_sources for which lists are loaded and how fresh the mirror is.',
   // The tool, resource, and prompt surface is fixed at startup — nothing
   // registers or retires a definition at runtime — so a 2026-07-28 client may
   // hold the listings for an hour. Shared caches may too: the same listings are
@@ -48,7 +48,7 @@ await createApp({
   landing: {
     requireAuth: false,
     tagline:
-      "Screen names against OFAC, EU, UK, and UN sanctions lists and resolve legal entities against GLEIF — offline, fuzzy-matched. A screening aid, not a compliance determination.",
+      "Screen names against OFAC, EU, UK, UN, and BIS watchlists and resolve legal entities against GLEIF — offline, fuzzy-matched. A screening aid, not a compliance determination.",
     links: [
       {
         label: "OFAC Sanctions List Service",

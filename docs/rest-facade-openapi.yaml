@@ -496,7 +496,7 @@ components:
           type: array
           items:
             type: string
-            enum: [ofac_sdn, ofac_consolidated, eu, uk, un]
+            enum: [ofac_sdn, ofac_consolidated, eu, uk, un, us_bis_entity, us_bis_dpl, us_bis_unverified]
         limit:
           type: integer
           minimum: 1
@@ -709,7 +709,7 @@ components:
               type: array
               items:
                 type: string
-                enum: [ofac_sdn, ofac_consolidated, eu, uk, un]
+                enum: [ofac_sdn, ofac_consolidated, eu, uk, un, us_bis_entity, us_bis_dpl, us_bis_unverified]
             limit:
               type: integer
               minimum: 1
@@ -1050,7 +1050,7 @@ components:
           type: array
           items:
             type: string
-            enum: [ofac_sdn, ofac_consolidated, eu, uk, un]
+            enum: [ofac_sdn, ofac_consolidated, eu, uk, un, us_bis_entity, us_bis_dpl, us_bis_unverified]
         limit:
           type: integer
           minimum: 1

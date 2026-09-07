@@ -1,6 +1,6 @@
 <div align="center">
   <h1>@cyanheads/sanctions-screening-mcp-server</h1>
-  <p><b>Screen names against the consolidated OFAC, EU, UK, and UN sanctions lists and resolve legal entities against GLEIF, fuzzy-matched offline over a local SQLite + FTS5 mirror. A screening aid, not a compliance determination.</b>
+  <p><b>Screen names against OFAC, EU, UK, UN, and BIS export-control watchlists, then resolve legal entities against GLEIF, fuzzy-matched offline over a local SQLite + FTS5 mirror. A screening aid, not a compliance determination.</b>
   <div>6 Tools • 3 Resources • 1 Prompt</div>
   </p>
 </div>
@@ -28,7 +28,7 @@
 
 ## Overview
 
-`sanctions-screening-mcp-server` turns the world's open sanctions data plus the global legal-entity registry into one screening-and-resolution workflow, answered offline and fuzzy-matched. It screens a name against the consolidated US (OFAC), EU, UK, and UN sanctions lists at once, and resolves legal entities against the GLEIF Legal Entity Identifier (LEI) database with corporate-ownership tracing.
+`sanctions-screening-mcp-server` turns the world's open sanctions data plus the global legal-entity registry into one screening-and-resolution workflow, answered offline and fuzzy-matched. It screens a name against consolidated OFAC, EU, UK, UN, and US BIS export-control watchlists at once, and resolves legal entities against the GLEIF Legal Entity Identifier (LEI) database with corporate-ownership tracing.
 
 All sources are bulk-downloadable, keyless, and clear for redistribution. The server mirrors them to a local SQLite + FTS5 index and serves matches from that mirror — no live API key, no per-request rate limit on the hot path. The agent sees screening verbs (`screen_name`, `resolve_entity`, `trace_ownership`); which list answered a query surfaces only as provenance on each hit.
 
@@ -40,7 +40,7 @@ Six tools organized around two workflows — screen a name against the watchlist
 
 | Tool | Description |
 |:---|:---|
-| `sanctions_screen_name` | Screen a name (person, company, vessel, aircraft) against all loaded watchlists at once — OFAC SDN + Consolidated, EU, UK, UN — alias- and fuzzy-aware. Returns scored potential matches with source list, program, designation date, and the matched alias. |
+| `sanctions_screen_name` | Screen a name (person, company, vessel, aircraft) against all loaded watchlists at once — OFAC SDN + Consolidated, EU, UK, UN, and BIS (Entity/DPL/Unverified) — alias- and fuzzy-aware. Returns scored potential matches with source list, program, designation date, and the matched alias. |
 | `sanctions_get_designation` | Fetch the full record for one sanctions designation by source list + entry ID: all aliases, identifiers, addresses, dates/places of birth, nationalities, program, legal basis, and designation date. |
 | `sanctions_resolve_entity` | Resolve a company / organization name (+ optional jurisdiction) to ranked candidate GLEIF LEIs. Turns a free-text counterparty name into a stable global identifier. |
 | `sanctions_get_entity` | Fetch the full GLEIF Level 1 record for one LEI — legal name, trading names, addresses, registration status, jurisdiction — plus a sanctions cross-reference screened on the legal name. |
@@ -51,7 +51,7 @@ Six tools organized around two workflows — screen a name against the watchlist
 
 The 80% entry point — "is this entity on a watchlist?"
 
-- Fans out across all four sanctions lists (OFAC SDN + Consolidated, EU, UK, UN) in one call; the source surfaces only as provenance per hit
+- Fans out across all loaded sanctions and export-control watchlists (OFAC SDN + Consolidated, EU, UK, UN, BIS Entity/DPL/Unverified) in one call; the source surfaces only as provenance per hit
 - Alias-aware: matches against every published primary name, a.k.a., and f.k.a., not just the canonical name
 - Strict mode (default): exact-normalized equality, then all-tokens-present via FTS5 — handles word-order swaps and missing interior words with no fuzzy library
 - Fuzzy mode (opt-in, or automatic when strict finds nothing): adds Jaro-Winkler similarity and Double-Metaphone phonetic matching for transliteration-class misses
@@ -123,7 +123,7 @@ All resource data is also reachable via the tools, which are the primary path fo
 
 ## Source lists
 
-The server aggregates five upstream sources behind the screening surface. All are bulk, keyless, and clear for redistribution.
+The server aggregates sanctions, export-control, and LEI reference sources behind one screening surface. All are bulk, keyless, and clear for redistribution.
 
 | Source | Role | License |
 |:---|:---|:---|
@@ -131,6 +131,9 @@ The server aggregates five upstream sources behind the screening surface. All ar
 | **EU Consolidated Financial Sanctions List** | EU-designated persons and entities | Freely redistributable |
 | **UK Sanctions List (UKSL, FCDO)** | UK sanctions targets — persons, entities, ships | Open Government Licence v3.0 |
 | **UN Security Council Consolidated List** | UN-designated individuals and entities across all regimes | Freely redistributable |
+| **US BIS Entity List** | US export-control restrictions on named entities | US Government public domain |
+| **US BIS Denied Persons List (DPL)** | US export-control denied-party restrictions on persons and organizations | US Government public domain |
+| **US BIS Unverified List** | Parties for which BIS could not complete end-use checks | US Government public domain |
 | **GLEIF LEI (Level 1 + Level 2)** | Who-is-who (entity reference) and who-owns-whom (corporate ownership) | CC0 1.0 Universal |
 
 The UK source is the **UK Sanctions List (UKSL)**, the single authoritative UK source since the OFSI Consolidated List closed on 28 January 2026.
@@ -143,7 +146,7 @@ The mirror is **not bundled** — the sanctions lists and the GLEIF golden copy 
 bun run mirror:init
 ```
 
-This streams all five sanctions lists in full, rebuilds the per-alias name index, then streams the GLEIF golden copy (Level 1 entities + Level 2 ownership relationships). It is resumable and intended to run once, off the request path.
+This streams all configured sanctions and export-control lists in full, rebuilds the per-alias name index, then streams the GLEIF golden copy (Level 1 entities + Level 2 ownership relationships). It is resumable and intended to run once, off the request path.
 
 | Script | Purpose |
 |:---|:---|
@@ -169,9 +172,9 @@ Built on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@cyanheads/mcp
 
 Sanctions-specific:
 
-- Multi-source, workflow-organized surface — one screen fans out across OFAC, EU, UK, and UN internally; sources surface only as provenance
+- Multi-source, workflow-organized surface — one screen fans out across OFAC, EU, UK, UN, and optional BIS lists internally; sources surface only as provenance
 - Local SQLite + FTS5 mirror via the framework `MirrorService` — offline, no live API key, no per-request rate limit
-- Normalized common schema across the four sanctions lists, with a denormalized per-alias name index (one row per name and per alias) so a query matches any of an entity's names in one FTS scan
+- Normalized common schema across sanctions and BIS watchlists, with a denormalized per-alias name index (one row per name and per alias) so a query matches any of an entity's names in one FTS scan
 - Strict-then-fuzzy matching: exact-normalized → all-tokens-present (FTS5) → Jaro-Winkler + Double-Metaphone, capped to bound work on short queries
 - GLEIF Level 1 + Level 2 ingest for entity resolution and beneficial-ownership tracing
 
@@ -396,6 +399,9 @@ All sources are keyless — there is no required API key. Every variable below i
 | `EU_FSF_URL` | Override for the EU consolidated XML file (includes the static public token path component). | official EU URL |
 | `UK_SANCTIONS_URL` | Override for the UK Sanctions List (UKSL) XML file. | official FCDO URL |
 | `UN_SC_URL` | Override for the UN Security Council consolidated XML file. | official UN URL |
+| `BIS_ENTITY_URL` | Optional override for the BIS Entity List dataset URL. Empty means this source is not ingested. | empty (disabled) |
+| `BIS_DPL_URL` | Optional override for the BIS Denied Persons List (DPL) dataset URL. Empty means this source is not ingested. | empty (disabled) |
+| `BIS_UNVERIFIED_URL` | Optional override for the BIS Unverified List dataset URL. Empty means this source is not ingested. | empty (disabled) |
 | `GLEIF_GOLDEN_COPY_BASE_URL` | Override for the GLEIF golden-copy / delta download API. | `https://goldencopy.gleif.org` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_SESSION_MODE` | Session mode: `auto` (resolves to stateful), `stateful`, or `stateless`. The shipped `.env.example` and Docker image pin stateless — no tool here needs a multi-round-trip input. | `stateless` |

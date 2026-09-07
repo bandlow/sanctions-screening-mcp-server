@@ -233,3 +233,87 @@ Punkt 4 ist im aktuellen Serverstand umgesetzt:
 
 - Die neuen SAP-Adapter sind bewusst als In-Process-Implementierung ausgepraegt (identisch zum aktuellen REST-MVP-Charakter).
 - Entsprechend dem Zielbild bleibt fuer produktiven Compliance-Betrieb die persistente CAP/HANA-Schicht fuer Audit/Fallbearbeitung weiterhin erforderlich.
+
+---
+
+# Doku: Umsetzung Punkt 5 (Exportkontroll-Quellen BIS)
+
+Datum: 2026-09-07
+
+## Ziel
+
+Punkt 5 aus der Umsetzungsreihenfolge realisieren:
+- BIS-Exportkontrollquellen (Entity List, Denied Persons List, Unverified List) in den bestehenden Ingest- und Screening-Stack integrieren.
+- Die neuen Quellen als vollwertige `source`-Codes in MCP- und REST-Vertraegen fuehren.
+- Optionales Aktivieren ueber URL-Overrides erlauben, ohne den Standardbetrieb zu brechen.
+
+## Durchgefuehrte Aenderungen
+
+### 1) Quellenmodell und Konfiguration erweitert
+
+Dateien:
+- src/services/screening/types.ts
+- src/config/server-config.ts
+
+Aenderungen:
+- Neue Source-Codes eingefuehrt:
+  - `us_bis_entity`
+  - `us_bis_dpl`
+  - `us_bis_unverified`
+- Labels in `SOURCE_LABELS` fuer alle drei BIS-Listen ergaenzt.
+- Neue optionale URL-Overrides in der Server-Konfiguration ergaenzt:
+  - `BIS_ENTITY_URL`
+  - `BIS_DPL_URL`
+  - `BIS_UNVERIFIED_URL`
+- Standardwert bleibt leer: Ist keine URL gesetzt, wird die jeweilige BIS-Liste nicht ingestiert.
+
+### 2) Ingest-Pipeline um BIS-CSV erweitert
+
+Datei:
+- src/services/screening/sanctions-ingest.ts
+
+Aenderungen:
+- CSV-Parser und Streaming-Ingest fuer BIS-Quellen implementiert.
+- Feldmapping auf das bestehende `designation`-Schema umgesetzt (inkl. Name, Entity-Typ, Programm, Datum, Adresse und Identifier falls vorhanden).
+- Rejection-Tracking (`missingIdentifier`, `unusableName`) fuer BIS in die bestehende Erntelogik integriert.
+- In `buildSanctionsIngesters()` werden BIS-Ingester nur registriert, wenn die jeweilige URL konfiguriert ist.
+
+### 3) MCP-, Resource- und REST-Vertraege auf BIS angehoben
+
+Dateien:
+- src/mcp-server/tools/definitions/screen-name.tool.ts
+- src/mcp-server/tools/definitions/search-identifier.tool.ts
+- src/mcp-server/tools/definitions/get-designation.tool.ts
+- src/mcp-server/tools/definitions/get-entity.tool.ts
+- src/mcp-server/tools/definitions/trace-ownership.tool.ts
+- src/mcp-server/resources/definitions/designation.resource.ts
+- src/rest/rest-facade.ts
+- docs/rest-facade-openapi.yaml
+
+Aenderungen:
+- Alle relevanten `source`-Enums um die drei BIS-Codes erweitert.
+- Source-Metadaten (`licenses`, URL-Aufloesung) um BIS-Eintraege ergaenzt.
+- REST- und OpenAPI-Schemas aktualisiert, damit BIS als gueltige Quelle durchgaengig akzeptiert und ausgegeben wird.
+
+### 4) Testabdeckung erweitert
+
+Dateien:
+- tests/services/ingest-parsers.test.ts
+- tests/fuzz/ingest-and-matcher.fuzz.test.ts
+
+Aenderungen:
+- Neue Parser-Tests fuer BIS-CSV hinzugefuegt.
+- Stream-vs-Buffer-Aequivalenz fuer BIS-CSV ueber verschiedene Chunk-Groessen verifiziert.
+- Fuzz-Invariante ergaenzt, dass beliebige Eingaben fuer BIS-CSV robust in leere Ergebnisse fallen (statt Ausfall).
+
+## Ergebnis
+
+Punkt 5 ist im aktuellen Serverstand umgesetzt:
+- BIS-Exportkontrolllisten koennen als zusaetzliche Screening-Quellen ingestiert werden.
+- Die Quellen sind vertraglich in MCP, REST und OpenAPI konsistent sichtbar.
+- Ohne gesetzte BIS-URLs bleibt das bisherige Verhalten unveraendert; mit gesetzten URLs werden die BIS-Listen in den Mirror-Lauf aufgenommen.
+
+## Hinweise
+
+- Die BIS-Aktivierung ist absichtlich opt-in ueber Konfiguration, damit bestehende Deployments ohne BIS-URLs unveraendert weiterlaufen.
+- Das Caveat bleibt unveraendert: Treffer sind Screening-Kandidaten zur Verifikation, keine Compliance-Entscheidung.

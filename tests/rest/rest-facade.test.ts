@@ -99,6 +99,26 @@ afterAll(async () => {
 });
 
 describe("REST facade compliance-case endpoints", () => {
+  it("serves OpenAPI YAML and Swagger UI endpoints", async () => {
+    const specResponse = await fetch(`${restBaseUrl}/api/v1/openapi.yaml`);
+    const specBody = await specResponse.text();
+
+    expect(specResponse.status).toBe(200);
+    expect(specResponse.headers.get("content-type")).toContain(
+      "application/yaml",
+    );
+    expect(specBody).toContain("openapi: 3.1.0");
+    expect(specBody).toContain("/screening/business-partner");
+
+    const uiResponse = await fetch(`${restBaseUrl}/ui/swagger`);
+    const uiBody = await uiResponse.text();
+
+    expect(uiResponse.status).toBe(200);
+    expect(uiResponse.headers.get("content-type")).toContain("text/html");
+    expect(uiBody).toContain("SwaggerUIBundle");
+    expect(uiBody).toContain("/api/v1/openapi.yaml");
+  });
+
   it("serves the compliance worklist UI route", async () => {
     const response = await fetch(`${restBaseUrl}/ui/compliance-cases`);
     const body = await response.text();
