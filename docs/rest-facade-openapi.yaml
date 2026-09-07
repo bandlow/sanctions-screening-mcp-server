@@ -18,6 +18,7 @@ servers:
 tags:
   - name: Screening
   - name: Sources
+  - name: Designations
   - name: Exceptions
   - name: SapIntegration
   - name: ComplianceCases
@@ -38,6 +39,47 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SourcesResponse'
+        '500':
+          description: Unexpected server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /designations/{source}/{entryId}:
+    get:
+      tags: [Designations]
+      summary: Fetch one full designation record by source and entry id
+      description: |
+        Returns one normalized designation detail record, including aliases,
+        identifiers, addresses, and vessel metadata when published (for example
+        vessel flag and vessel type).
+      operationId: getDesignationDetails
+      x-implementation-status: implemented
+      x-timeout-ms: 30000
+      parameters:
+        - $ref: '#/components/parameters/XRequestId'
+        - $ref: '#/components/parameters/SourceCodePath'
+        - $ref: '#/components/parameters/EntryIdPath'
+      responses:
+        '200':
+          description: Designation details for the requested source and entry id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesignationDetailsResponse'
+        '404':
+          description: Designation id not found in the mirror.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Local sanctions mirror not initialized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Unexpected server error.
           content:
@@ -452,6 +494,22 @@ components:
       schema:
         type: string
         minLength: 1
+    SourceCodePath:
+      name: source
+      in: path
+      required: true
+      description: Source-list code of the designation.
+      schema:
+        type: string
+        enum: [ofac_sdn, ofac_consolidated, eu, uk, un, us_bis_entity, us_bis_dpl, us_bis_unverified]
+    EntryIdPath:
+      name: entryId
+      in: path
+      required: true
+      description: Source-native designation entry id.
+      schema:
+        type: string
+        minLength: 1
     CaseIdPath:
       name: caseId
       in: path
@@ -590,6 +648,99 @@ components:
         designationDate:
           type: string
           format: date
+
+    VesselDetails:
+      type: object
+      required: [callSigns, formerFlags]
+      properties:
+        flag: { type: string }
+        formerFlags:
+          type: array
+          items: { type: string }
+        vesselType: { type: string }
+        callSigns:
+          type: array
+          items: { type: string }
+        tonnage: { type: string }
+        grossRegisteredTonnage: { type: string }
+
+    DesignationDetails:
+      type: object
+      required:
+        - source
+        - sourceLabel
+        - sourceEntryId
+        - entityType
+        - primaryName
+        - aliases
+        - identifiers
+        - addresses
+        - datesOfBirth
+        - nationalities
+        - caveat
+      properties:
+        source:
+          type: string
+          enum: [ofac_sdn, ofac_consolidated, eu, uk, un, us_bis_entity, us_bis_dpl, us_bis_unverified]
+        sourceLabel: { type: string }
+        sourceEntryId: { type: string }
+        entityType:
+          type: string
+          enum: [person, organization, vessel, aircraft, unknown]
+        primaryName: { type: string }
+        program: { type: string }
+        legalBasis: { type: string }
+        designationDate:
+          type: string
+          format: date
+        aliases:
+          type: array
+          items:
+            type: object
+            required: [name, nameType]
+            properties:
+              name: { type: string }
+              nameType:
+                type: string
+                enum: [primary, aka, fka, low-quality-aka]
+        identifiers:
+          type: array
+          items:
+            type: object
+            required: [type, value]
+            properties:
+              type: { type: string }
+              value: { type: string }
+              country: { type: string }
+        addresses:
+          type: array
+          items:
+            type: object
+            required: [full]
+            properties:
+              full: { type: string }
+              country: { type: string }
+        datesOfBirth:
+          type: array
+          items:
+            type: object
+            properties:
+              date: { type: string }
+              place: { type: string }
+        nationalities:
+          type: array
+          items: { type: string }
+        vesselDetails:
+          $ref: '#/components/schemas/VesselDetails'
+        remarks: { type: string }
+        caveat: { type: string }
+
+    DesignationDetailsResponse:
+      type: object
+      required: [designation]
+      properties:
+        designation:
+          $ref: '#/components/schemas/DesignationDetails'
 
     SourcesResponse:
       type: object

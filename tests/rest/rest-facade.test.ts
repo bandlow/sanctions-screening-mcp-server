@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { NormalizedDesignation } from "@/services/screening/types.js";
 
 interface ComplianceCaseSummary {
   caseId: string;
@@ -30,6 +31,32 @@ interface ComplianceCaseDecisionResponse {
 
 const httpPort = 38010;
 const restBaseUrl = `http://127.0.0.1:${httpPort + 1}`;
+
+const REST_VESSEL_FIXTURE: NormalizedDesignation = {
+  id: "ofac_sdn:FX-REST-VESSEL-1",
+  source: "ofac_sdn",
+  sourceEntryId: "FX-REST-VESSEL-1",
+  entityType: "vessel",
+  primaryName: "MV REST FACADE TEST",
+  program: "TEST-VESSEL",
+  designationDate: "2026-09-07",
+  payload: {
+    aliases: [{ name: "REST TEST SHIP", nameType: "aka" }],
+    identifiers: [
+      { type: "Vessel Registration Identification", value: "IMO 9218478" },
+    ],
+    addresses: [],
+    datesOfBirth: [],
+    nationalities: [],
+    vesselDetails: {
+      flag: "Iran",
+      formerFlags: ["Malta"],
+      vesselType: "Crude Oil Tanker",
+      callSigns: ["9HEG9"],
+      tonnage: "297013",
+    },
+  },
+};
 
 let stopRestFacade: (() => Promise<void>) | undefined;
 let tempDir = "";
@@ -60,7 +87,7 @@ beforeAll(async () => {
   initScreeningService();
   const service = getScreeningService();
   await service.seedFixtures({
-    designations: FIXTURE_DESIGNATIONS,
+    designations: [...FIXTURE_DESIGNATIONS, REST_VESSEL_FIXTURE],
     leiEntities: FIXTURE_LEI_ENTITIES,
     leiRelationships: FIXTURE_LEI_RELATIONSHIPS,
   });
@@ -99,6 +126,50 @@ afterAll(async () => {
 });
 
 describe("REST facade compliance-case endpoints", () => {
+  it("returns designation details including vessel metadata via REST", async () => {
+    const response = await fetch(
+      `${restBaseUrl}/api/v1/designations/ofac_sdn/FX-REST-VESSEL-1`,
+    );
+    const payload = (await response.json()) as {
+      designation: {
+        source: string;
+        sourceEntryId: string;
+        entityType: string;
+        vesselDetails?: {
+          flag?: string;
+          formerFlags: string[];
+          vesselType?: string;
+          callSigns: string[];
+          tonnage?: string;
+        };
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.designation.source).toBe("ofac_sdn");
+    expect(payload.designation.sourceEntryId).toBe("FX-REST-VESSEL-1");
+    expect(payload.designation.entityType).toBe("vessel");
+    expect(payload.designation.vesselDetails).toEqual({
+      flag: "Iran",
+      formerFlags: ["Malta"],
+      vesselType: "Crude Oil Tanker",
+      callSigns: ["9HEG9"],
+      tonnage: "297013",
+    });
+  });
+
+  it("returns designation_not_found for unknown designation details", async () => {
+    const response = await fetch(
+      `${restBaseUrl}/api/v1/designations/ofac_sdn/DOES-NOT-EXIST`,
+    );
+    const payload = (await response.json()) as {
+      error: { code: string; message: string };
+    };
+
+    expect(response.status).toBe(404);
+    expect(payload.error.code).toBe("designation_not_found");
+  });
+
   it("serves OpenAPI YAML and Swagger UI endpoints", async () => {
     const specResponse = await fetch(`${restBaseUrl}/api/v1/openapi.yaml`);
     const specBody = await specResponse.text();
@@ -109,6 +180,7 @@ describe("REST facade compliance-case endpoints", () => {
     );
     expect(specBody).toContain("openapi: 3.1.0");
     expect(specBody).toContain("/screening/business-partner");
+    expect(specBody).toContain("/designations/{source}/{entryId}");
 
     const uiResponse = await fetch(`${restBaseUrl}/ui/swagger`);
     const uiBody = await uiResponse.text();

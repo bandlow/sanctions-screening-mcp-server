@@ -398,6 +398,16 @@ async function routeRequest(
       return;
     }
 
+    const designationMatch = matchDesignationPath(url.pathname);
+    if (req.method === "GET" && designationMatch) {
+      await handleGetDesignation(
+        designationMatch.source,
+        designationMatch.entryId,
+        res,
+      );
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/v1/openapi.yaml") {
       await handleOpenApiYaml(res);
       return;
@@ -563,6 +573,64 @@ async function handleOpenApiYaml(res: ServerResponse): Promise<void> {
       },
     });
   }
+}
+
+async function handleGetDesignation(
+  source: SourceCode,
+  entryId: string,
+  res: ServerResponse,
+): Promise<void> {
+  const svc = getScreeningService();
+  const sanctions = await svc.sanctionsReadiness();
+  if (!sanctions.ready) {
+    writeJson(res, 503, {
+      error: {
+        code: "mirror_not_ready",
+        message: "The local sanctions mirror is not yet populated.",
+        recovery:
+          "Run the mirror:init lifecycle script to load the sanctions lists, then retry; check /api/v1/sources for readiness.",
+      },
+    });
+    return;
+  }
+
+  const designation = await svc.getDesignation(source, entryId);
+  if (!designation) {
+    writeJson(res, 404, {
+      error: {
+        code: "designation_not_found",
+        message: `No ${source} designation with entry ID \"${entryId}\".`,
+      },
+    });
+    return;
+  }
+
+  writeJson(res, 200, {
+    designation: {
+      source: designation.source,
+      sourceLabel: SOURCE_LABELS[designation.source],
+      sourceEntryId: designation.sourceEntryId,
+      entityType: designation.entityType,
+      primaryName: designation.primaryName,
+      ...(designation.program ? { program: designation.program } : {}),
+      ...(designation.legalBasis ? { legalBasis: designation.legalBasis } : {}),
+      ...(designation.designationDate
+        ? { designationDate: designation.designationDate }
+        : {}),
+      aliases: designation.payload.aliases,
+      identifiers: designation.payload.identifiers,
+      addresses: designation.payload.addresses,
+      datesOfBirth: designation.payload.datesOfBirth,
+      nationalities: designation.payload.nationalities,
+      ...(designation.payload.vesselDetails
+        ? { vesselDetails: designation.payload.vesselDetails }
+        : {}),
+      ...(designation.payload.remarks
+        ? { remarks: designation.payload.remarks }
+        : {}),
+      caveat: SCREENING_CAVEAT,
+    },
+  });
 }
 
 async function handleBusinessPartnerScreen(
@@ -1345,6 +1413,18 @@ function matchBpHistoryPath(pathname: string): { bpId: string } | undefined {
     /^\/api\/v1\/screening\/business-partner\/([^/]+)\/history$/.exec(pathname);
   if (!match?.[1]) return undefined;
   return { bpId: decodeURIComponent(match[1]) };
+}
+
+function matchDesignationPath(
+  pathname: string,
+): { source: SourceCode; entryId: string } | undefined {
+  const match = /^\/api\/v1\/designations\/([^/]+)\/([^/]+)$/.exec(pathname);
+  if (!match?.[1] || !match?.[2]) return undefined;
+  const sourceParsed = SOURCE_ENUM.safeParse(decodeURIComponent(match[1]));
+  if (!sourceParsed.success) return undefined;
+  const entryId = decodeURIComponent(match[2]).trim();
+  if (!entryId) return undefined;
+  return { source: sourceParsed.data, entryId };
 }
 
 function matchExceptionsPath(pathname: string): { bpId: string } | undefined {

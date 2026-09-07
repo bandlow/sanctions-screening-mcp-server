@@ -52,6 +52,7 @@ import type {
   NameRecord,
   NormalizedDesignation,
   SourceCode,
+  VesselDetails,
 } from "@/services/screening/types.js";
 import { parseXml } from "@/services/screening/xml.js";
 import {
@@ -613,6 +614,8 @@ interface OfacReferenceSets {
   aliasType: Map<string, string>;
   /** Country ID → label. */
   country: Map<string, string>;
+  /** DetailReference ID → label text (used by VersionDetail@DetailReferenceID). */
+  detailReference: Map<string, string>;
   /** FeatureType ID → label (8 = Birthdate, 9 = Place of Birth, …). */
   featureType: Map<string, string>;
   /** IDRegDocType ID → label (1626 = Vessel Registration Identification, …). */
@@ -630,6 +633,7 @@ function emptyOfacReferenceSets(): OfacReferenceSets {
   return {
     aliasType: new Map(),
     country: new Map(),
+    detailReference: new Map(),
     featureType: new Map(),
     idRegDocType: new Map(),
     locPartType: new Map(),
@@ -693,6 +697,15 @@ function buildOfacReferenceSets(
     const label = asText((c as Record<string, unknown>)["#text"] ?? c);
     if (id && label) country.set(id, label);
   }
+  const detailReference = new Map<string, string>();
+  for (const d of asArray(
+    (sets.DetailReferenceValues as Record<string, unknown> | undefined)
+      ?.DetailReference as unknown,
+  )) {
+    const id = asText((d as Record<string, unknown>)["@_ID"]);
+    const label = asText((d as Record<string, unknown>)["#text"] ?? d);
+    if (id && label) detailReference.set(id, label);
+  }
   const subTypeToPartyType = new Map<string, string>();
   const subTypeLabel = new Map<string, string>();
   for (const s of asArray(
@@ -710,6 +723,7 @@ function buildOfacReferenceSets(
   return {
     aliasType,
     country,
+    detailReference,
     featureType,
     idRegDocType,
     locPartType,
@@ -1228,6 +1242,7 @@ function parseOfacAdvanced(
     datesOfBirth,
     identifiers: featureIdentifiers,
     placesOfBirth,
+    vesselDetails,
   } = extractOfacFeatures(profile, refs);
   const identifiers = [
     ...featureIdentifiers,
@@ -1258,6 +1273,7 @@ function parseOfacAdvanced(
           ? mergeDobPob(datesOfBirth, placesOfBirth)
           : [],
       nationalities: [],
+      ...(vesselDetails ? { vesselDetails } : {}),
     },
   };
 }
@@ -1295,6 +1311,42 @@ function mapOfacPartySubType(
   return "unknown";
 }
 
+/** Trim, dedupe, and omit an empty vessel-details block. */
+function compactVesselDetails(
+  details: VesselDetails,
+): VesselDetails | undefined {
+  const callSigns = [
+    ...new Set(details.callSigns.map((value) => value.trim()).filter(Boolean)),
+  ];
+  const formerFlags = [
+    ...new Set(
+      details.formerFlags.map((value) => value.trim()).filter(Boolean),
+    ),
+  ];
+  const flag = details.flag?.trim();
+  const vesselType = details.vesselType?.trim();
+  const tonnage = details.tonnage?.trim();
+  const grossRegisteredTonnage = details.grossRegisteredTonnage?.trim();
+  if (
+    !flag &&
+    !vesselType &&
+    !tonnage &&
+    !grossRegisteredTonnage &&
+    callSigns.length === 0 &&
+    formerFlags.length === 0
+  ) {
+    return;
+  }
+  return {
+    ...(flag ? { flag } : {}),
+    ...(vesselType ? { vesselType } : {}),
+    ...(tonnage ? { tonnage } : {}),
+    ...(grossRegisteredTonnage ? { grossRegisteredTonnage } : {}),
+    callSigns,
+    formerFlags,
+  };
+}
+
 /** Birthdate / place-of-birth / identifier values pulled from a profile's `<Feature>`s. */
 function extractOfacFeatures(
   profile: Record<string, unknown> | undefined,
@@ -1303,30 +1355,65 @@ function extractOfacFeatures(
   datesOfBirth: string[];
   identifiers: IdentifierRecord[];
   placesOfBirth: string[];
+  vesselDetails?: VesselDetails;
 } {
   const datesOfBirth: string[] = [];
   const identifiers: IdentifierRecord[] = [];
   const placesOfBirth: string[] = [];
+  const vesselDetails: VesselDetails = {
+    callSigns: [],
+    formerFlags: [],
+  };
   for (const featRaw of asArray(profile?.Feature as unknown)) {
     const feat = featRaw as Record<string, unknown>;
     const label = refs.featureType.get(asText(feat["@_FeatureTypeID"]) ?? "");
-    const normalizedLabel = label?.toLowerCase();
+    const normalizedLabel = label?.toLowerCase().replace(/\s+/g, " ").trim();
     if (normalizedLabel === "birthdate") {
       const date = ofacFeatureDate(feat);
       if (date) datesOfBirth.push(date);
     } else if (normalizedLabel === "place of birth") {
       const place = asText(ofacFeatureVersions(feat)[0]?.VersionLocation);
       // Place often lives as free text in the VersionDetail; capture what's there.
-      const detail = ofacFeatureDetail(feat);
+      const detail = ofacFeatureDetail(feat, refs);
       const pob = detail ?? place;
       if (pob) placesOfBirth.push(pob);
+    } else if (normalizedLabel?.includes("former vessel flag")) {
+      vesselDetails.formerFlags.push(...ofacFeatureDetails(feat, refs));
+    } else if (normalizedLabel?.includes("vessel flag")) {
+      const flag = ofacFeatureDetail(feat, refs);
+      if (!vesselDetails.flag && flag) vesselDetails.flag = flag;
+    } else if (normalizedLabel?.includes("vessel type")) {
+      const vesselType = ofacFeatureDetail(feat, refs);
+      if (!vesselDetails.vesselType && vesselType)
+        vesselDetails.vesselType = vesselType;
+    } else if (normalizedLabel?.includes("call sign")) {
+      vesselDetails.callSigns.push(...ofacFeatureDetails(feat, refs));
+    } else if (
+      normalizedLabel?.includes("gross registered tonnage") ||
+      normalizedLabel?.includes("grt")
+    ) {
+      const grossRegisteredTonnage = ofacFeatureDetail(feat, refs);
+      if (!vesselDetails.grossRegisteredTonnage && grossRegisteredTonnage) {
+        vesselDetails.grossRegisteredTonnage = grossRegisteredTonnage;
+      }
+    } else if (normalizedLabel?.includes("tonnage")) {
+      const tonnage = ofacFeatureDetail(feat, refs);
+      if (!vesselDetails.tonnage && tonnage) vesselDetails.tonnage = tonnage;
     } else if (label && isOfacIdentifierFeature(label)) {
-      for (const detail of ofacFeatureDetails(feat)) {
+      for (const detail of ofacFeatureDetails(feat, refs)) {
         identifiers.push({ type: label, value: detail });
       }
     }
   }
-  return { datesOfBirth, identifiers, placesOfBirth };
+  const compactedVesselDetails = compactVesselDetails(vesselDetails);
+  return {
+    datesOfBirth,
+    identifiers,
+    placesOfBirth,
+    ...(compactedVesselDetails
+      ? { vesselDetails: compactedVesselDetails }
+      : {}),
+  };
 }
 
 /** OFAC feature versions can be a single object or an array-of-one/many. */
@@ -1339,20 +1426,33 @@ function ofacFeatureVersions(
 }
 
 /** Pull all free-text details published under a feature's versions. */
-function ofacFeatureDetails(feat: Record<string, unknown>): string[] {
+function ofacFeatureDetails(
+  feat: Record<string, unknown>,
+  refs: OfacReferenceSets,
+): string[] {
   return ofacFeatureVersions(feat)
-    .map((version) =>
-      asText(
-        (version.VersionDetail as Record<string, unknown>)?.["#text"] ??
-          version.VersionDetail,
-      ),
-    )
+    .map((version) => ofacVersionDetailText(version, refs))
     .filter((detail): detail is string => Boolean(detail));
 }
 
 /** Pull the first free-text feature detail, for singleton feature types. */
-function ofacFeatureDetail(feat: Record<string, unknown>): string | undefined {
-  return ofacFeatureDetails(feat)[0];
+function ofacFeatureDetail(
+  feat: Record<string, unknown>,
+  refs: OfacReferenceSets,
+): string | undefined {
+  return ofacFeatureDetails(feat, refs)[0];
+}
+
+/** Resolve one FeatureVersion detail text, including DetailReferenceID lookups. */
+function ofacVersionDetailText(
+  version: Record<string, unknown>,
+  refs: OfacReferenceSets,
+): string | undefined {
+  const raw = (version.VersionDetail ?? {}) as Record<string, unknown>;
+  const direct = asText(raw["#text"] ?? version.VersionDetail);
+  if (direct) return direct;
+  const refId = asText(raw["@_DetailReferenceID"]);
+  return refId ? refs.detailReference.get(refId) : undefined;
 }
 
 /** Feature labels that OFAC renders in the Details.aspx ID table. */
@@ -2043,9 +2143,7 @@ export interface SanctionsSyncOptions {
  */
 export function createSanctionsSync(options: SanctionsSyncOptions) {
   const pageSize = options.pageSize ?? SYNC_PAGE_SIZE;
-  return async function* sync(ctx: {
-    signal: AbortSignal;
-  }): AsyncGenerator<{
+  return async function* sync(ctx: { signal: AbortSignal }): AsyncGenerator<{
     checkpoint?: string;
     records: Record<string, string | number | null>[];
   }> {

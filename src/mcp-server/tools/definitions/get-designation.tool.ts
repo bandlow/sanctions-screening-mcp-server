@@ -133,6 +133,28 @@ export const getDesignationTool = tool("sanctions_get_designation", {
     nationalities: z
       .array(z.string())
       .describe("Published nationalities / citizenships."),
+    vesselDetails: z
+      .object({
+        flag: z
+          .string()
+          .optional()
+          .describe("Current vessel flag, when published."),
+        formerFlags: z
+          .array(z.string())
+          .describe("Historical vessel flags, when published."),
+        vesselType: z
+          .string()
+          .optional()
+          .describe("Vessel type / class, when published."),
+        callSigns: z.array(z.string()).describe("Published call signs."),
+        tonnage: z.string().optional().describe("Tonnage as published."),
+        grossRegisteredTonnage: z
+          .string()
+          .optional()
+          .describe("Gross registered tonnage, when published separately."),
+      })
+      .optional()
+      .describe("Vessel-specific metadata, when published by the source."),
     remarks: z
       .string()
       .optional()
@@ -199,6 +221,9 @@ export const getDesignationTool = tool("sanctions_get_designation", {
       addresses: d.payload.addresses,
       datesOfBirth: d.payload.datesOfBirth,
       nationalities: d.payload.nationalities,
+      ...(d.payload.vesselDetails
+        ? { vesselDetails: d.payload.vesselDetails }
+        : {}),
       ...(d.payload.remarks ? { remarks: d.payload.remarks } : {}),
       caveat: SCREENING_CAVEAT,
     };
@@ -241,6 +266,29 @@ export const getDesignationTool = tool("sanctions_get_designation", {
     }
     if (r.nationalities.length > 0)
       lines.push(`\n**Nationalities:** ${r.nationalities.join(", ")}`);
+    if (r.vesselDetails) {
+      lines.push("\n## Vessel details");
+      if (r.vesselDetails.flag)
+        lines.push(`- **Flag:** ${r.vesselDetails.flag}`);
+      if (r.vesselDetails.formerFlags.length > 0) {
+        lines.push(
+          `- **Former flags:** ${r.vesselDetails.formerFlags.join(", ")}`,
+        );
+      }
+      if (r.vesselDetails.vesselType) {
+        lines.push(`- **Vessel type:** ${r.vesselDetails.vesselType}`);
+      }
+      if (r.vesselDetails.callSigns.length > 0) {
+        lines.push(`- **Call signs:** ${r.vesselDetails.callSigns.join(", ")}`);
+      }
+      if (r.vesselDetails.tonnage)
+        lines.push(`- **Tonnage:** ${r.vesselDetails.tonnage}`);
+      if (r.vesselDetails.grossRegisteredTonnage) {
+        lines.push(
+          `- **Gross registered tonnage:** ${r.vesselDetails.grossRegisteredTonnage}`,
+        );
+      }
+    }
     if (r.remarks) lines.push(`\n**Remarks:** ${r.remarks}`);
     lines.push(`\n> ${r.caveat}`);
     return [{ type: "text", text: lines.join("\n") }];

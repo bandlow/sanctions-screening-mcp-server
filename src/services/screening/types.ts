@@ -86,6 +86,22 @@ export interface DobRecord {
   place?: string;
 }
 
+/** Vessel-specific designation details, when a source publishes them. */
+export interface VesselDetails {
+  /** Published call signs. */
+  callSigns: string[];
+  /** Current vessel flag, when published. */
+  flag?: string;
+  /** Historical vessel flags, when published. */
+  formerFlags: string[];
+  /** Gross registered tonnage, when published distinctly from tonnage. */
+  grossRegisteredTonnage?: string;
+  /** Tonnage as published. */
+  tonnage?: string;
+  /** Vessel type / class, when published. */
+  vesselType?: string;
+}
+
 /**
  * The full normalized record for one designation, stored as JSON in
  * `designation.payload` and surfaced by `sanctions_get_designation`.
@@ -98,6 +114,8 @@ export interface DesignationPayload {
   nationalities: string[];
   /** Free-form remarks/title published by the source, when present. */
   remarks?: string;
+  /** Vessel-only details such as flag or vessel type, when published. */
+  vesselDetails?: VesselDetails;
 }
 
 /**
