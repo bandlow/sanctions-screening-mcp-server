@@ -402,6 +402,20 @@ Punkt 3 wurde als lauffähiger MVP direkt in der REST-Fassade umgesetzt:
 
 Wichtig: Der Zustand liegt aktuell noch in-memory im laufenden Prozess (kein persistentes Audit-Backend). Für produktive Compliance-Nachweispflichten bleibt die geplante CAP/HANA-Audit-Schicht unverändert erforderlich.
 
+### Umsetzungsstand Punkt 4 (MVP, 2026-09-07)
+
+Punkt 4 wurde im bestehenden Server als SAP-Adapter-Layer umgesetzt:
+
+- Neue Integrationsendpunkte in der REST-Fassade:
+  - `POST /api/v1/integration/sap/ecc/business-partner-changed`
+  - `POST /api/v1/integration/sap/s4/business-partner-changed`
+  - `POST /api/v1/integration/sap/batch-business-partners`
+- ECC- und S/4-Payloads werden auf das bestehende Screening gemappt (kein zweiter Fachkern).
+- Erfolgreiche SAP-Aufrufe schreiben identisch in den vorhandenen In-Process-History- und Case-Fluss.
+- Die Endpunkte sind im OpenAPI-Vertrag dokumentiert und testseitig abgesichert.
+
+Wichtig: Das ist bewusst ein Übergangs-/MVP-Adapter im laufenden Node/Bun-Service. Das Zielbild bleibt unverändert: SAP ruft langfristig primär die CAP/HANA-Compliance-App auf; der MCP-Server bleibt die Screening-Engine hinter der REST-Grenze.
+
 ---
 
 ## Offene Fragen für die nächste Konkretisierungsrunde

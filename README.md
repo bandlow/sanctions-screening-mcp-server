@@ -270,6 +270,9 @@ Endpoint rollout status:
 - `GET /api/v1/compliance/cases` - implemented (case worklist, in-memory store)
 - `GET /api/v1/compliance/cases/{caseId}` - implemented (case detail, hits, decisions)
 - `POST /api/v1/compliance/cases/{caseId}/decision` - implemented (manual decision + optional four-eyes approval)
+- `POST /api/v1/integration/sap/ecc/business-partner-changed` - implemented (ECC realtime trigger adapter)
+- `POST /api/v1/integration/sap/s4/business-partner-changed` - implemented (S/4 Event Mesh payload adapter)
+- `POST /api/v1/integration/sap/batch-business-partners` - implemented (SAP batch adapter, in-process execution)
 
 Compliance case worklist UI (MVP):
 
@@ -282,6 +285,22 @@ Example:
 curl.exe -X POST http://localhost:3011/api/v1/screening/business-partner `
   -H "Content-Type: application/json" `
   --data-raw '{"bpId":"1000001234","name":"ACME Trading LLC","role":"vendor","country":"DE","matchMode":"strict"}'
+```
+
+SAP integration adapter examples:
+
+```powershell
+curl.exe -X POST http://localhost:3011/api/v1/integration/sap/ecc/business-partner-changed `
+  -H "Content-Type: application/json" `
+  --data-raw '{"sourceSystem":"ecc","triggerType":"badi","businessPartner":{"bpId":"1000001234","name":"ACME Trading LLC","country":"DE","role":"vendor"}}'
+
+curl.exe -X POST http://localhost:3011/api/v1/integration/sap/s4/business-partner-changed `
+  -H "Content-Type: application/json" `
+  --data-raw '{"sourceSystem":"s4hana","eventType":"sap.s4.beh.businesspartner.v1.BusinessPartner.Changed.v1","eventId":"evt-001","businessPartner":{"bpId":"2000009876","name":"Global Ocean Shipping","country":"US","role":"customer"}}'
+
+curl.exe -X POST http://localhost:3011/api/v1/integration/sap/batch-business-partners `
+  -H "Content-Type: application/json" `
+  --data-raw '{"sourceSystem":"ecc","triggeredBy":"nightly-bp-job","items":[{"bpId":"3000000001","name":"Ivan Testovich Volkov","country":"DE","role":"vendor"},{"bpId":"3000000002","name":"ACME Trading LLC","country":"DE","role":"customer"}]}'
 ```
 
 To call the endpoint manually, send the MCP `initialize` request first, followed

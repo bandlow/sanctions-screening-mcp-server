@@ -79,7 +79,12 @@ afterAll(async () => {
   await closeScreeningService?.();
   resetScreeningServiceFn?.();
   try {
-    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(tempDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 50,
+    });
   } catch {
     // Windows can transiently hold SQLite files; cleanup failures are non-fatal.
   }
@@ -258,5 +263,111 @@ describe("REST facade compliance-case endpoints", () => {
     expect(response.status).toBe(400);
     expect(payload.error.code).toBe("validation_error");
     expect(payload.error.message).toContain("status");
+  });
+
+  it("accepts ECC realtime trigger payloads and returns screening candidates", async () => {
+    const response = await fetch(
+      `${restBaseUrl}/api/v1/integration/sap/ecc/business-partner-changed`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceSystem: "ecc",
+          triggerType: "badi",
+          businessPartner: {
+            bpId: "BP-SAP-ECC-1001",
+            name: "Ivan Testovich Volkov",
+            country: "DE",
+            role: "vendor",
+          },
+        }),
+      },
+    );
+
+    const payload = (await response.json()) as {
+      integration: { sourceSystem: string; mode: string; triggerType: string };
+      result: { hits: unknown[]; caveat: string };
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.integration.sourceSystem).toBe("ecc");
+    expect(payload.integration.mode).toBe("realtime");
+    expect(payload.integration.triggerType).toBe("badi");
+    expect(payload.result.hits.length).toBeGreaterThan(0);
+    expect(payload.result.caveat).toContain("not a compliance determination");
+  });
+
+  it("accepts S/4 realtime event payloads and SAP batch payloads", async () => {
+    const realtimeResponse = await fetch(
+      `${restBaseUrl}/api/v1/integration/sap/s4/business-partner-changed`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceSystem: "s4hana",
+          eventType: "sap.s4.beh.businesspartner.v1.BusinessPartner.Changed.v1",
+          eventId: "evt-1001",
+          businessPartner: {
+            bpId: "BP-SAP-S4-1001",
+            name: "Ivan Testovich Volkov",
+            country: "DE",
+            role: "customer",
+          },
+        }),
+      },
+    );
+
+    const realtimePayload = (await realtimeResponse.json()) as {
+      integration: { sourceSystem: string; mode: string; eventType: string };
+      result: { hits: unknown[] };
+    };
+
+    expect(realtimeResponse.status).toBe(200);
+    expect(realtimePayload.integration.sourceSystem).toBe("s4hana");
+    expect(realtimePayload.integration.mode).toBe("realtime");
+    expect(realtimePayload.integration.eventType).toContain("BusinessPartner");
+    expect(realtimePayload.result.hits.length).toBeGreaterThan(0);
+
+    const batchResponse = await fetch(
+      `${restBaseUrl}/api/v1/integration/sap/batch-business-partners`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sourceSystem: "ecc",
+          triggeredBy: "nightly-batch-job",
+          items: [
+            {
+              bpId: "BP-SAP-BATCH-1001",
+              name: "Ivan Testovich Volkov",
+              country: "DE",
+              role: "vendor",
+            },
+            {
+              bpId: "BP-SAP-BATCH-1002",
+              name: "ACME Trading LLC",
+              country: "US",
+              role: "customer",
+            },
+          ],
+        }),
+      },
+    );
+
+    const batchPayload = (await batchResponse.json()) as {
+      integration: { sourceSystem: string; mode: string; triggeredBy: string };
+      status: string;
+      acceptedCount: number;
+      processedCount: number;
+      failedCount: number;
+    };
+
+    expect(batchResponse.status).toBe(202);
+    expect(batchPayload.integration.sourceSystem).toBe("ecc");
+    expect(batchPayload.integration.mode).toBe("batch");
+    expect(batchPayload.integration.triggeredBy).toBe("nightly-batch-job");
+    expect(batchPayload.status).toBe("accepted");
+    expect(batchPayload.acceptedCount).toBe(2);
+    expect(batchPayload.processedCount + batchPayload.failedCount).toBe(2);
   });
 });

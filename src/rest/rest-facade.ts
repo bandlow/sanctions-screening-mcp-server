@@ -118,6 +118,72 @@ const BatchScreenRequestSchema = z
   })
   .strict();
 
+const SapIntegrationScreeningSchema = z
+  .object({
+    entityType: z
+      .enum(["any", "person", "organization", "vessel", "aircraft"])
+      .default("any"),
+    matchMode: z.enum(["strict", "fuzzy"]).default("strict"),
+    minScore: z.number().min(0).max(1).optional(),
+    sources: z.array(SOURCE_ENUM).optional(),
+    limit: z.number().int().min(1).max(100).default(25),
+  })
+  .optional();
+
+const SapBusinessPartnerSchema = z
+  .object({
+    bpId: z.string().min(1),
+    name: z.string().min(1),
+    country: z.string().length(2).optional(),
+    role: z.enum(["customer", "vendor", "other"]).optional(),
+  })
+  .strict();
+
+const SapEccBusinessPartnerChangedRequestSchema = z
+  .object({
+    sourceSystem: z.literal("ecc"),
+    triggerType: z
+      .enum(["badi", "change_document", "manual"])
+      .describe("ECC trigger category for traceability."),
+    businessPartner: SapBusinessPartnerSchema,
+    screening: SapIntegrationScreeningSchema,
+    context: z
+      .object({
+        changeDocumentId: z.string().min(1).optional(),
+        iflowMessageId: z.string().min(1).optional(),
+      })
+      .optional(),
+  })
+  .strict();
+
+const SapS4BusinessPartnerChangedRequestSchema = z
+  .object({
+    sourceSystem: z.literal("s4hana"),
+    eventType: z
+      .string()
+      .min(1)
+      .describe("S/4HANA business event type from Event Mesh."),
+    eventId: z.string().min(1).optional(),
+    businessPartner: SapBusinessPartnerSchema,
+    screening: SapIntegrationScreeningSchema,
+    context: z
+      .object({
+        communicationArrangement: z.string().min(1).optional(),
+      })
+      .optional(),
+  })
+  .strict();
+
+const SapBatchBusinessPartnersRequestSchema = z
+  .object({
+    sourceSystem: z.enum(["ecc", "s4hana"]),
+    triggeredBy: z.string().min(1).optional(),
+    runId: z.string().min(1).optional(),
+    items: z.array(SapBusinessPartnerSchema).min(1),
+    screening: SapIntegrationScreeningSchema,
+  })
+  .strict();
+
 const CreateExceptionRequestSchema = z
   .object({
     sourceEntryId: z.string().min(1),
@@ -140,6 +206,36 @@ const CaseDecisionRequestSchema = z
 type BusinessPartnerScreenRequest = z.infer<
   typeof BusinessPartnerScreenRequestSchema
 >;
+
+type ScreeningResponseBody = {
+  businessPartner: {
+    bpId?: string;
+    name: string;
+    country?: string;
+    role?: "customer" | "vendor" | "other";
+  };
+  screening: {
+    normalizedQuery: string;
+    requestedMatchMode: "strict" | "fuzzy";
+    matchModeUsed: "strict" | "fuzzy";
+    entityType: "any" | "person" | "organization" | "vessel" | "aircraft";
+    minScore?: number;
+    sources: Array<z.infer<typeof SOURCE_ENUM>>;
+    sourcesAsOf?: string;
+  };
+  pagination: {
+    limit: number;
+    offset: number;
+    returned: number;
+    totalAvailable: number;
+    totalAvailableBasis: string;
+    hasMore: boolean;
+    nextOffset?: number;
+  };
+  hits: Array<Record<string, unknown>>;
+  notice?: string;
+  caveat: string;
+};
 
 type StoredScreeningEvent = {
   eventId: string;
@@ -325,6 +421,30 @@ async function routeRequest(
       return;
     }
 
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/v1/integration/sap/ecc/business-partner-changed"
+    ) {
+      await handleSapEccBusinessPartnerChanged(req, res, reqLog);
+      return;
+    }
+
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/v1/integration/sap/s4/business-partner-changed"
+    ) {
+      await handleSapS4BusinessPartnerChanged(req, res, reqLog);
+      return;
+    }
+
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/v1/integration/sap/batch-business-partners"
+    ) {
+      await handleSapBatchBusinessPartners(req, res, reqLog);
+      return;
+    }
+
     const exceptionMatch = matchExceptionsPath(url.pathname);
     if (req.method === "GET" && exceptionMatch) {
       handleListExceptions(exceptionMatch.bpId, res);
@@ -433,31 +553,7 @@ async function handleBusinessPartnerScreen(
     return;
   }
 
-  if (input.bpId) {
-    const eventId = randomUUID();
-    appendHistoryEvent({
-      eventId,
-      bpId: input.bpId,
-      queryName: input.name,
-      matchMode: input.matchMode,
-      matchModeUsed: response.body.screening.matchModeUsed,
-      entityType: input.entityType,
-      sourcesQueried: response.body.screening.sources,
-      ...(response.body.screening.sourcesAsOf
-        ? { sourcesAsOf: response.body.screening.sourcesAsOf }
-        : {}),
-      executedAt: new Date().toISOString(),
-      hitCount: response.body.hits.length,
-      screeningStatus: "screened",
-    });
-
-    upsertComplianceCaseFromScreening(
-      input.bpId,
-      input.name,
-      eventId,
-      response.body.hits,
-    );
-  }
+  recordSuccessfulScreeningSideEffects(input, response.body);
 
   writeJson(res, 200, response.body);
 }
@@ -559,31 +655,25 @@ async function handleScreeningBatch(
     }
 
     processedCount += 1;
-    if (item.bpId) {
-      const eventId = randomUUID();
-      appendHistoryEvent({
-        eventId,
+    recordSuccessfulScreeningSideEffects(
+      {
         bpId: item.bpId,
-        queryName: item.name,
-        matchMode: input.screening?.matchMode ?? "strict",
-        matchModeUsed: response.body.screening.matchModeUsed,
+        name: item.name,
+        ...(item.country ? { country: item.country } : {}),
+        ...(item.role ? { role: item.role } : {}),
         entityType: input.screening?.entityType ?? "any",
-        sourcesQueried: response.body.screening.sources,
-        ...(response.body.screening.sourcesAsOf
-          ? { sourcesAsOf: response.body.screening.sourcesAsOf }
+        matchMode: input.screening?.matchMode ?? "strict",
+        ...(input.screening?.minScore !== undefined
+          ? { minScore: input.screening.minScore }
           : {}),
-        executedAt: new Date().toISOString(),
-        hitCount: response.body.hits.length,
-        screeningStatus: "screened",
-      });
-
-      upsertComplianceCaseFromScreening(
-        item.bpId,
-        item.name,
-        eventId,
-        response.body.hits,
-      );
-    }
+        ...(input.screening?.sources
+          ? { sources: input.screening.sources }
+          : {}),
+        limit: input.screening?.limit ?? 25,
+        offset: 0,
+      },
+      response.body,
+    );
   }
 
   writeJson(res, 202, {
@@ -594,6 +684,220 @@ async function handleScreeningBatch(
     processedCount,
     failedCount,
     note: "Batch endpoint currently processes immediately in-process and records per-BP history events.",
+    caveat: SCREENING_CAVEAT,
+  });
+}
+
+async function handleSapEccBusinessPartnerChanged(
+  req: IncomingMessage,
+  res: ServerResponse,
+  reqLog: ContextLogger,
+): Promise<void> {
+  const payload = await readJsonBodyForRoute(req, res);
+  if (payload === undefined) return;
+
+  const parsed = SapEccBusinessPartnerChangedRequestSchema.safeParse(payload);
+  if (!parsed.success) {
+    writeJson(res, 400, {
+      error: {
+        code: "validation_error",
+        message: "Invalid ECC business-partner change payload.",
+        details: parsed.error.flatten(),
+      },
+    });
+    return;
+  }
+
+  const body = parsed.data;
+  const screeningInput: BusinessPartnerScreenRequest = {
+    bpId: body.businessPartner.bpId,
+    name: body.businessPartner.name,
+    ...(body.businessPartner.country
+      ? { country: body.businessPartner.country }
+      : {}),
+    ...(body.businessPartner.role ? { role: body.businessPartner.role } : {}),
+    entityType: body.screening?.entityType ?? "any",
+    matchMode: body.screening?.matchMode ?? "strict",
+    ...(body.screening?.minScore !== undefined
+      ? { minScore: body.screening.minScore }
+      : {}),
+    ...(body.screening?.sources ? { sources: body.screening.sources } : {}),
+    limit: body.screening?.limit ?? 25,
+    offset: 0,
+  };
+
+  const response = await executeScreening(screeningInput, reqLog);
+  if ("error" in response) {
+    writeJson(res, response.status, {
+      error: response.error,
+    });
+    return;
+  }
+
+  recordSuccessfulScreeningSideEffects(screeningInput, response.body);
+
+  writeJson(res, 200, {
+    integration: {
+      sourceSystem: "ecc",
+      triggerType: body.triggerType,
+      mode: "realtime",
+      receivedAt: new Date().toISOString(),
+      ...(body.context ? { context: body.context } : {}),
+    },
+    result: response.body,
+  });
+}
+
+async function handleSapS4BusinessPartnerChanged(
+  req: IncomingMessage,
+  res: ServerResponse,
+  reqLog: ContextLogger,
+): Promise<void> {
+  const payload = await readJsonBodyForRoute(req, res);
+  if (payload === undefined) return;
+
+  const parsed = SapS4BusinessPartnerChangedRequestSchema.safeParse(payload);
+  if (!parsed.success) {
+    writeJson(res, 400, {
+      error: {
+        code: "validation_error",
+        message: "Invalid S/4 business-partner event payload.",
+        details: parsed.error.flatten(),
+      },
+    });
+    return;
+  }
+
+  const body = parsed.data;
+  const screeningInput: BusinessPartnerScreenRequest = {
+    bpId: body.businessPartner.bpId,
+    name: body.businessPartner.name,
+    ...(body.businessPartner.country
+      ? { country: body.businessPartner.country }
+      : {}),
+    ...(body.businessPartner.role ? { role: body.businessPartner.role } : {}),
+    entityType: body.screening?.entityType ?? "any",
+    matchMode: body.screening?.matchMode ?? "strict",
+    ...(body.screening?.minScore !== undefined
+      ? { minScore: body.screening.minScore }
+      : {}),
+    ...(body.screening?.sources ? { sources: body.screening.sources } : {}),
+    limit: body.screening?.limit ?? 25,
+    offset: 0,
+  };
+
+  const response = await executeScreening(screeningInput, reqLog);
+  if ("error" in response) {
+    writeJson(res, response.status, {
+      error: response.error,
+    });
+    return;
+  }
+
+  recordSuccessfulScreeningSideEffects(screeningInput, response.body);
+
+  writeJson(res, 200, {
+    integration: {
+      sourceSystem: "s4hana",
+      eventType: body.eventType,
+      ...(body.eventId ? { eventId: body.eventId } : {}),
+      mode: "realtime",
+      receivedAt: new Date().toISOString(),
+      ...(body.context ? { context: body.context } : {}),
+    },
+    result: response.body,
+  });
+}
+
+async function handleSapBatchBusinessPartners(
+  req: IncomingMessage,
+  res: ServerResponse,
+  reqLog: ContextLogger,
+): Promise<void> {
+  const payload = await readJsonBodyForRoute(req, res);
+  if (payload === undefined) return;
+
+  const parsed = SapBatchBusinessPartnersRequestSchema.safeParse(payload);
+  if (!parsed.success) {
+    writeJson(res, 400, {
+      error: {
+        code: "validation_error",
+        message: "Invalid SAP batch payload.",
+        details: parsed.error.flatten(),
+      },
+    });
+    return;
+  }
+
+  const input = parsed.data;
+  const batchId = input.runId ?? randomUUID();
+  const acceptedAt = new Date().toISOString();
+
+  let processedCount = 0;
+  let failedCount = 0;
+  const failedItems: Array<{ bpId: string; reason: string; code: string }> = [];
+
+  for (const item of input.items) {
+    const screeningInput: BusinessPartnerScreenRequest = {
+      bpId: item.bpId,
+      name: item.name,
+      ...(item.country ? { country: item.country } : {}),
+      ...(item.role ? { role: item.role } : {}),
+      entityType: input.screening?.entityType ?? "any",
+      matchMode: input.screening?.matchMode ?? "strict",
+      ...(input.screening?.minScore !== undefined
+        ? { minScore: input.screening.minScore }
+        : {}),
+      ...(input.screening?.sources ? { sources: input.screening.sources } : {}),
+      limit: input.screening?.limit ?? 25,
+      offset: 0,
+    };
+
+    const response = await executeScreening(screeningInput, reqLog);
+    if ("error" in response) {
+      failedCount += 1;
+      failedItems.push({
+        bpId: item.bpId,
+        reason: response.error.message,
+        code: response.error.code,
+      });
+      appendHistoryEvent({
+        eventId: randomUUID(),
+        bpId: item.bpId,
+        queryName: item.name,
+        matchMode: input.screening?.matchMode ?? "strict",
+        matchModeUsed: input.screening?.matchMode ?? "strict",
+        entityType: input.screening?.entityType ?? "any",
+        sourcesQueried:
+          input.screening?.sources && input.screening.sources.length > 0
+            ? input.screening.sources
+            : [...SOURCE_CODES],
+        executedAt: new Date().toISOString(),
+        hitCount: 0,
+        screeningStatus:
+          response.error.code === "mirror_not_ready" ? "not_ready" : "error",
+      });
+      continue;
+    }
+
+    processedCount += 1;
+    recordSuccessfulScreeningSideEffects(screeningInput, response.body);
+  }
+
+  writeJson(res, 202, {
+    integration: {
+      sourceSystem: input.sourceSystem,
+      mode: "batch",
+      ...(input.triggeredBy ? { triggeredBy: input.triggeredBy } : {}),
+    },
+    batchId,
+    status: "accepted",
+    acceptedAt,
+    acceptedCount: input.items.length,
+    processedCount,
+    failedCount,
+    failedItems,
+    note: "SAP batch endpoint currently processes immediately in-process and records per-BP history events.",
     caveat: SCREENING_CAVEAT,
   });
 }
@@ -820,35 +1124,7 @@ async function executeScreening(
   reqLog: ContextLogger,
 ): Promise<
   | {
-      body: {
-        businessPartner: {
-          bpId?: string;
-          name: string;
-          country?: string;
-          role?: "customer" | "vendor" | "other";
-        };
-        screening: {
-          normalizedQuery: string;
-          requestedMatchMode: "strict" | "fuzzy";
-          matchModeUsed: "strict" | "fuzzy";
-          entityType: "any" | "person" | "organization" | "vessel" | "aircraft";
-          minScore?: number;
-          sources: Array<z.infer<typeof SOURCE_ENUM>>;
-          sourcesAsOf?: string;
-        };
-        pagination: {
-          limit: number;
-          offset: number;
-          returned: number;
-          totalAvailable: number;
-          totalAvailableBasis: string;
-          hasMore: boolean;
-          nextOffset?: number;
-        };
-        hits: Array<Record<string, unknown>>;
-        notice?: string;
-        caveat: string;
-      };
+      body: ScreeningResponseBody;
     }
   | {
       status: 503;
@@ -948,6 +1224,37 @@ async function executeScreening(
       caveat: SCREENING_CAVEAT,
     },
   };
+}
+
+function recordSuccessfulScreeningSideEffects(
+  input: BusinessPartnerScreenRequest,
+  responseBody: ScreeningResponseBody,
+): void {
+  if (!input.bpId) return;
+
+  const eventId = randomUUID();
+  appendHistoryEvent({
+    eventId,
+    bpId: input.bpId,
+    queryName: input.name,
+    matchMode: input.matchMode,
+    matchModeUsed: responseBody.screening.matchModeUsed,
+    entityType: input.entityType,
+    sourcesQueried: responseBody.screening.sources,
+    ...(responseBody.screening.sourcesAsOf
+      ? { sourcesAsOf: responseBody.screening.sourcesAsOf }
+      : {}),
+    executedAt: new Date().toISOString(),
+    hitCount: responseBody.hits.length,
+    screeningStatus: "screened",
+  });
+
+  upsertComplianceCaseFromScreening(
+    input.bpId,
+    input.name,
+    eventId,
+    responseBody.hits,
+  );
 }
 
 function appendHistoryEvent(event: StoredScreeningEvent): void {

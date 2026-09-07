@@ -160,3 +160,76 @@ Punkt 3 ist als MVP umgesetzt und dokumentiert:
 - Der Case-/Decision-Zustand ist aktuell bewusst In-Process (kein persistenter Speicher).
 - Fuer produktiven Betrieb ist die Verlagerung in die geplante CAP/HANA-Schicht weiterhin vorgesehen.
 - Die Screening-Caveat-Logik bleibt unveraendert: Treffer sind Kandidaten zur Verifikation, keine automatische Entscheidung.
+
+---
+
+# Doku: Umsetzung Punkt 4 (SAP-Integrationsmuster)
+
+Datum: 2026-09-07
+
+## Ziel
+
+Punkt 4 aus der Umsetzungsreihenfolge realisieren:
+- Technische Eingangskanaele fuer SAP-ECC- und SAP-S/4HANA-Trigger bereitstellen.
+- SAP-spezifische Payloads auf den bestehenden Screening-Kern mappen (ohne doppelte Fachlogik).
+- Integration formal im OpenAPI-Vertrag dokumentieren.
+
+## Durchgefuehrte Aenderungen
+
+### 1) SAP-Adapter-Endpunkte in der REST-Fassade implementiert
+
+Datei: src/rest/rest-facade.ts
+
+Aenderungen:
+- Neue Endpunkte umgesetzt:
+  - POST /api/v1/integration/sap/ecc/business-partner-changed
+  - POST /api/v1/integration/sap/s4/business-partner-changed
+  - POST /api/v1/integration/sap/batch-business-partners
+- Fachliches Verhalten:
+  - ECC- und S/4-Realtime-Payloads werden auf das bestehende Business-Partner-Screening gemappt.
+  - Batch-Payloads werden eintragsweise verarbeitet und liefern Zaehler + Fehlerliste zurueck.
+  - Treffer bleiben strikt als Kandidaten zur Verifikation (Caveat unveraendert).
+- Konsistenz im Nebenverhalten:
+  - Erfolgreiche SAP-Screenings schreiben wie die bestehenden REST-Routen in History.
+  - Bei Treffern wird die vorhandene Case-Erzeugungslogik wiederverwendet.
+  - Side-Effects wurden in eine gemeinsame Hilfsfunktion zusammengefuehrt, um Unterschiede zwischen Endpunkten zu vermeiden.
+
+### 2) OpenAPI-Vertrag erweitert
+
+Datei: docs/rest-facade-openapi.yaml
+
+Aenderungen:
+- Neue Pfade inkl. Request-/Response-Schemas fuer SAP-Integration hinzugefuegt.
+- Neuer Tag `SapIntegration` fuer klare Gruppierung.
+- Implementierungsstatus fuer alle neuen SAP-Operationen auf `implemented` gesetzt.
+
+### 3) README aktualisiert
+
+Datei: README.md
+
+Aenderungen:
+- Rollout-Status um die drei SAP-Adapter-Endpunkte erweitert.
+- Beispielaufrufe fuer ECC-Realtime, S/4-Realtime und SAP-Batch hinzugefuegt.
+
+### 4) Testabdeckung erweitert
+
+Datei: tests/rest/rest-facade.test.ts
+
+Aenderungen:
+- Zuschnitt auf die neuen SAP-Adapter-Endpunkte ergaenzt.
+- Verifiziert werden:
+  - Realtime-Aufrufpfad fuer ECC inkl. Screening-Antwort.
+  - Realtime-Aufrufpfad fuer S/4 inkl. Screening-Antwort.
+  - Batch-Aufrufpfad inkl. `202 accepted` und Zaehlerfeldern.
+
+## Ergebnis
+
+Punkt 4 ist im aktuellen Serverstand umgesetzt:
+- SAP-spezifische Eingangspayloads koennen direkt an dedizierte Integrationsendpunkte gesendet werden.
+- Die Verarbeitung nutzt weiterhin den bestehenden Screening-Kern und bleibt damit konsistent zur restlichen REST-Fassade.
+- Die Integrationsschnittstelle ist im OpenAPI-Vertrag formal beschrieben und im README mit Beispielaufrufen dokumentiert.
+
+## Hinweise
+
+- Die neuen SAP-Adapter sind bewusst als In-Process-Implementierung ausgepraegt (identisch zum aktuellen REST-MVP-Charakter).
+- Entsprechend dem Zielbild bleibt fuer produktiven Compliance-Betrieb die persistente CAP/HANA-Schicht fuer Audit/Fallbearbeitung weiterhin erforderlich.
