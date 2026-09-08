@@ -259,6 +259,7 @@ With the example above (`MCP_HTTP_PORT=3010`), REST is available at
 API contract:
 
 - OpenAPI 3.1 spec: `docs/rest-facade-openapi.yaml`
+- Swagger UI: `http://localhost:3011/ui/swagger` (with the example port configuration)
 - Default request timeout contract: `30000ms`
 - Recommended idempotency header for POST routes: `Idempotency-Key`
 

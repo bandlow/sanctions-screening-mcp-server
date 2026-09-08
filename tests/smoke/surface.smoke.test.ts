@@ -5,56 +5,50 @@
  * @module tests/smoke/surface.smoke.test
  */
 
-import { describe, expect, it } from "vitest";
-import { allPromptDefinitions } from "@/mcp-server/prompts/definitions/index.js";
-import { allResourceDefinitions } from "@/mcp-server/resources/definitions/index.js";
-import { allToolDefinitions } from "@/mcp-server/tools/definitions/index.js";
+import { describe, expect, it } from 'vitest';
+import { allPromptDefinitions } from '@/mcp-server/prompts/definitions/index.js';
+import { allResourceDefinitions } from '@/mcp-server/resources/definitions/index.js';
+import { allToolDefinitions } from '@/mcp-server/tools/definitions/index.js';
 
-describe("registered MCP surface", () => {
-  it("exports all seven tools exactly once", () => {
+describe('registered MCP surface', () => {
+  it('exports all seven tools exactly once', () => {
     const names = allToolDefinitions.map((definition) => definition.name);
     expect(names).toEqual([
-      "sanctions_screen_name",
-      "sanctions_search_identifier",
-      "sanctions_get_designation",
-      "sanctions_list_sources",
-      "sanctions_resolve_entity",
-      "sanctions_get_entity",
-      "sanctions_trace_ownership",
+      'sanctions_screen_name',
+      'sanctions_search_identifier',
+      'sanctions_get_designation',
+      'sanctions_list_sources',
+      'sanctions_resolve_entity',
+      'sanctions_get_entity',
+      'sanctions_trace_ownership',
     ]);
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("accepts the minimal documented input for every tool", () => {
+  it('accepts the minimal documented input for every tool', () => {
     const inputs = new Map<string, Record<string, unknown>>([
-      ["sanctions_screen_name", { name: "Example Name" }],
-      ["sanctions_search_identifier", { identifier: "IMO 8909575" }],
-      ["sanctions_get_designation", { source: "ofac_sdn", entryId: "123" }],
-      ["sanctions_list_sources", {}],
-      ["sanctions_resolve_entity", { name: "Example Holdings" }],
-      ["sanctions_get_entity", { lei: "5493001KJTIIGC8Y1R12" }],
-      ["sanctions_trace_ownership", { lei: "5493001KJTIIGC8Y1R12" }],
+      ['sanctions_screen_name', { name: 'Example Name' }],
+      ['sanctions_search_identifier', { identifier: 'IMO 8909575' }],
+      ['sanctions_get_designation', { source: 'ofac_sdn', entryId: '123' }],
+      ['sanctions_list_sources', {}],
+      ['sanctions_resolve_entity', { name: 'Example Holdings' }],
+      ['sanctions_get_entity', { lei: '5493001KJTIIGC8Y1R12' }],
+      ['sanctions_trace_ownership', { lei: '5493001KJTIIGC8Y1R12' }],
     ]);
 
     for (const definition of allToolDefinitions) {
-      expect(
-        definition.input.safeParse(inputs.get(definition.name)).success,
-      ).toBe(true);
+      expect(definition.input.safeParse(inputs.get(definition.name)).success).toBe(true);
     }
   });
 
-  it("exports all resource and prompt definitions exactly once", () => {
-    expect(
-      allResourceDefinitions.map((definition) =>
-        definition.uriTemplate.toString(),
-      ),
-    ).toEqual([
-      "sanctions://designation/{source}/{entryId}",
-      "sanctions://entity/{lei}",
-      "sanctions://sources",
+  it('exports all resource and prompt definitions exactly once', () => {
+    expect(allResourceDefinitions.map((definition) => definition.uriTemplate.toString())).toEqual([
+      'sanctions://designation/{source}/{entryId}',
+      'sanctions://entity/{lei}',
+      'sanctions://sources',
     ]);
     expect(allPromptDefinitions.map((definition) => definition.name)).toEqual([
-      "sanctions_vet_counterparty",
+      'sanctions_vet_counterparty',
     ]);
   });
 });

@@ -7,16 +7,16 @@
  * @module mcp-server/tools/definitions/get-designation.tool
  */
 
-import { tool, z } from "@cyanheads/mcp-ts-core";
-import { JsonRpcErrorCode } from "@cyanheads/mcp-ts-core/errors";
-import { getScreeningService } from "@/services/screening/screening-service.js";
-import { SOURCE_LABELS, type SourceCode } from "@/services/screening/types.js";
-import { SCREENING_CAVEAT } from "./_shared.js";
+import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { getScreeningService } from '@/services/screening/screening-service.js';
+import { SOURCE_LABELS, type SourceCode } from '@/services/screening/types.js';
+import { SCREENING_CAVEAT } from './_shared.js';
 
-export const getDesignationTool = tool("sanctions_get_designation", {
-  title: "sanctions-screening-mcp-server: get designation",
+export const getDesignationTool = tool('sanctions_get_designation', {
+  title: 'sanctions-screening-mcp-server: get designation',
   description:
-    "Fetch the full record for one sanctions designation by source list + entry ID — the drill-in after sanctions_screen_name surfaces a candidate. Returns all published aliases, identifiers (passport/national-ID/tax), addresses, dates and places of birth, nationalities, sanctioning program, legal basis, and designation date. The record reflects exactly what the source published; missing fields mean the source omitted them. This is a screening aid — the designation record supports a compliance review, it is not itself a determination.",
+    'Fetch the full record for one sanctions designation by source list + entry ID — the drill-in after sanctions_screen_name surfaces a candidate. Returns all published aliases, identifiers (passport/national-ID/tax), addresses, dates and places of birth, nationalities, sanctioning program, legal basis, and designation date. The record reflects exactly what the source published; missing fields mean the source omitted them. This is a screening aid — the designation record supports a compliance review, it is not itself a determination.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -25,185 +25,142 @@ export const getDesignationTool = tool("sanctions_get_designation", {
   input: z.object({
     source: z
       .enum([
-        "ofac_sdn",
-        "ofac_consolidated",
-        "eu",
-        "uk",
-        "un",
-        "us_bis_entity",
-        "us_bis_dpl",
-        "us_bis_unverified",
+        'ofac_sdn',
+        'ofac_consolidated',
+        'eu',
+        'uk',
+        'un',
+        'us_bis_entity',
+        'us_bis_dpl',
+        'us_bis_unverified',
       ])
-      .describe("Which source list the entry belongs to."),
+      .describe('Which source list the entry belongs to.'),
     entryId: z
       .string()
       .min(1)
-      .describe(
-        "The source list's own entry ID (the sourceEntryId from sanctions_screen_name).",
-      ),
+      .describe("The source list's own entry ID (the sourceEntryId from sanctions_screen_name)."),
   }),
   output: z.object({
     source: z
       .enum([
-        "ofac_sdn",
-        "ofac_consolidated",
-        "eu",
-        "uk",
-        "un",
-        "us_bis_entity",
-        "us_bis_dpl",
-        "us_bis_unverified",
+        'ofac_sdn',
+        'ofac_consolidated',
+        'eu',
+        'uk',
+        'un',
+        'us_bis_entity',
+        'us_bis_dpl',
+        'us_bis_unverified',
       ])
-      .describe("Source list the entry belongs to."),
-    sourceLabel: z.string().describe("Human-readable name of the source list."),
+      .describe('Source list the entry belongs to.'),
+    sourceLabel: z.string().describe('Human-readable name of the source list.'),
     sourceEntryId: z.string().describe("The source list's own entry ID."),
     entityType: z
-      .enum(["person", "organization", "vessel", "aircraft", "unknown"])
-      .describe("Entity classification as published."),
-    primaryName: z.string().describe("Primary published name."),
-    program: z
-      .string()
-      .optional()
-      .describe("Sanctioning program / regime, when published."),
-    legalBasis: z
-      .string()
-      .optional()
-      .describe("Statutory / regulatory basis, when published."),
-    designationDate: z
-      .string()
-      .optional()
-      .describe("Designation date, when published."),
+      .enum(['person', 'organization', 'vessel', 'aircraft', 'unknown'])
+      .describe('Entity classification as published.'),
+    primaryName: z.string().describe('Primary published name.'),
+    program: z.string().optional().describe('Sanctioning program / regime, when published.'),
+    legalBasis: z.string().optional().describe('Statutory / regulatory basis, when published.'),
+    designationDate: z.string().optional().describe('Designation date, when published.'),
     aliases: z
       .array(
         z
           .object({
-            name: z.string().describe("Alias as published."),
+            name: z.string().describe('Alias as published.'),
             nameType: z
-              .enum(["primary", "aka", "fka", "low-quality-aka"])
-              .describe(
-                "Alias provenance: a.k.a., f.k.a., or a low-quality a.k.a.",
-              ),
+              .enum(['primary', 'aka', 'fka', 'low-quality-aka'])
+              .describe('Alias provenance: a.k.a., f.k.a., or a low-quality a.k.a.'),
           })
-          .describe("One published alias."),
+          .describe('One published alias.'),
       )
-      .describe("All published aliases / name variants."),
+      .describe('All published aliases / name variants.'),
     identifiers: z
       .array(
         z
           .object({
-            type: z
-              .string()
-              .describe(
-                "Identifier category (e.g. Passport, National ID, Tax ID).",
-              ),
-            value: z.string().describe("Identifier value as published."),
-            country: z
-              .string()
-              .optional()
-              .describe("Issuing country/authority, when published."),
+            type: z.string().describe('Identifier category (e.g. Passport, National ID, Tax ID).'),
+            value: z.string().describe('Identifier value as published.'),
+            country: z.string().optional().describe('Issuing country/authority, when published.'),
           })
-          .describe("One structured identifier."),
+          .describe('One structured identifier.'),
       )
-      .describe(
-        "Published identifiers (passport, national ID, tax, registration, …).",
-      ),
+      .describe('Published identifiers (passport, national ID, tax, registration, …).'),
     addresses: z
       .array(
         z
           .object({
-            full: z.string().describe("Single-line rendering of the address."),
-            country: z.string().optional().describe("Country, when published."),
+            full: z.string().describe('Single-line rendering of the address.'),
+            country: z.string().optional().describe('Country, when published.'),
           })
-          .describe("One published address."),
+          .describe('One published address.'),
       )
-      .describe("Published addresses."),
+      .describe('Published addresses.'),
     datesOfBirth: z
       .array(
         z
           .object({
-            date: z.string().optional().describe("Date of birth as published."),
-            place: z
-              .string()
-              .optional()
-              .describe("Place of birth, when published."),
+            date: z.string().optional().describe('Date of birth as published.'),
+            place: z.string().optional().describe('Place of birth, when published.'),
           })
-          .describe("One date/place of birth."),
+          .describe('One date/place of birth.'),
       )
-      .describe("Published dates and places of birth (persons)."),
-    nationalities: z
-      .array(z.string())
-      .describe("Published nationalities / citizenships."),
+      .describe('Published dates and places of birth (persons).'),
+    nationalities: z.array(z.string()).describe('Published nationalities / citizenships.'),
     vesselDetails: z
       .object({
-        flag: z
-          .string()
-          .optional()
-          .describe("Current vessel flag, when published."),
-        formerFlags: z
-          .array(z.string())
-          .describe("Historical vessel flags, when published."),
-        vesselType: z
-          .string()
-          .optional()
-          .describe("Vessel type / class, when published."),
-        callSigns: z.array(z.string()).describe("Published call signs."),
-        tonnage: z.string().optional().describe("Tonnage as published."),
+        flag: z.string().optional().describe('Current vessel flag, when published.'),
+        formerFlags: z.array(z.string()).describe('Historical vessel flags, when published.'),
+        vesselType: z.string().optional().describe('Vessel type / class, when published.'),
+        callSigns: z.array(z.string()).describe('Published call signs.'),
+        tonnage: z.string().optional().describe('Tonnage as published.'),
         grossRegisteredTonnage: z
           .string()
           .optional()
-          .describe("Gross registered tonnage, when published separately."),
+          .describe('Gross registered tonnage, when published separately.'),
       })
       .optional()
-      .describe("Vessel-specific metadata, when published by the source."),
+      .describe('Vessel-specific metadata, when published by the source.'),
     remarks: z
       .string()
       .optional()
-      .describe("Free-form remarks published by the source, when present."),
+      .describe('Free-form remarks published by the source, when present.'),
     caveat: z
       .string()
       .describe(
-        "Decision-support caveat — this is a screening aid, not a compliance determination.",
+        'Decision-support caveat — this is a screening aid, not a compliance determination.',
       ),
   }),
   errors: [
     {
-      reason: "designation_not_found",
+      reason: 'designation_not_found',
       code: JsonRpcErrorCode.NotFound,
-      when: "No designation exists for the given source + entry ID in the mirror.",
+      when: 'No designation exists for the given source + entry ID in the mirror.',
       recovery:
-        "Verify the source and entryId via sanctions_screen_name, which returns the exact sourceEntryId for each hit.",
+        'Verify the source and entryId via sanctions_screen_name, which returns the exact sourceEntryId for each hit.',
     },
     {
-      reason: "mirror_not_ready",
+      reason: 'mirror_not_ready',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: "The sanctions mirror has never completed an initial sync.",
+      when: 'The sanctions mirror has never completed an initial sync.',
       retryable: true,
-      recovery:
-        "Run the mirror:init lifecycle script to load the sanctions lists, then retry.",
+      recovery: 'Run the mirror:init lifecycle script to load the sanctions lists, then retry.',
     },
   ],
 
   async handler(input, ctx) {
     const svc = getScreeningService();
     if (!(await svc.sanctionsReady())) {
-      throw ctx.fail(
-        "mirror_not_ready",
-        "The local sanctions mirror is not yet populated.",
-        {
-          ...ctx.recoveryFor("mirror_not_ready"),
-        },
-      );
+      throw ctx.fail('mirror_not_ready', 'The local sanctions mirror is not yet populated.', {
+        ...ctx.recoveryFor('mirror_not_ready'),
+      });
     }
 
-    const d = await svc.getDesignation(
-      input.source as SourceCode,
-      input.entryId,
-    );
+    const d = await svc.getDesignation(input.source as SourceCode, input.entryId);
     if (!d) {
       throw ctx.fail(
-        "designation_not_found",
+        'designation_not_found',
         `No ${input.source} designation with entry ID "${input.entryId}".`,
-        { ...ctx.recoveryFor("designation_not_found") },
+        { ...ctx.recoveryFor('designation_not_found') },
       );
     }
 
@@ -221,76 +178,61 @@ export const getDesignationTool = tool("sanctions_get_designation", {
       addresses: d.payload.addresses,
       datesOfBirth: d.payload.datesOfBirth,
       nationalities: d.payload.nationalities,
-      ...(d.payload.vesselDetails
-        ? { vesselDetails: d.payload.vesselDetails }
-        : {}),
+      ...(d.payload.vesselDetails ? { vesselDetails: d.payload.vesselDetails } : {}),
       ...(d.payload.remarks ? { remarks: d.payload.remarks } : {}),
       caveat: SCREENING_CAVEAT,
     };
   },
 
   format: (r) => {
-    const lines = [`# ${r.primaryName}`, ""];
-    lines.push(
-      `**List:** ${r.sourceLabel} (\`${r.source}\`) | **Entry ID:** ${r.sourceEntryId}`,
-    );
+    const lines = [`# ${r.primaryName}`, ''];
+    lines.push(`**List:** ${r.sourceLabel} (\`${r.source}\`) | **Entry ID:** ${r.sourceEntryId}`);
     lines.push(`**Type:** ${r.entityType}`);
     if (r.program) lines.push(`**Program:** ${r.program}`);
     if (r.legalBasis) lines.push(`**Legal basis:** ${r.legalBasis}`);
     if (r.designationDate) lines.push(`**Designated:** ${r.designationDate}`);
 
     if (r.aliases.length > 0) {
-      lines.push("\n## Aliases");
+      lines.push('\n## Aliases');
       for (const a of r.aliases) lines.push(`- ${a.name} (${a.nameType})`);
     }
     if (r.identifiers.length > 0) {
-      lines.push("\n## Identifiers");
+      lines.push('\n## Identifiers');
       for (const i of r.identifiers) {
-        lines.push(
-          `- **${i.type}:** ${i.value}${i.country ? ` (${i.country})` : ""}`,
-        );
+        lines.push(`- **${i.type}:** ${i.value}${i.country ? ` (${i.country})` : ''}`);
       }
     }
     if (r.addresses.length > 0) {
-      lines.push("\n## Addresses");
-      for (const a of r.addresses)
-        lines.push(`- ${a.full}${a.country ? ` — ${a.country}` : ""}`);
+      lines.push('\n## Addresses');
+      for (const a of r.addresses) lines.push(`- ${a.full}${a.country ? ` — ${a.country}` : ''}`);
     }
     if (r.datesOfBirth.length > 0) {
-      lines.push("\n## Dates of birth");
+      lines.push('\n## Dates of birth');
       for (const d of r.datesOfBirth) {
-        lines.push(
-          `- ${d.date ?? "Unknown date"}${d.place ? ` at ${d.place}` : ""}`,
-        );
+        lines.push(`- ${d.date ?? 'Unknown date'}${d.place ? ` at ${d.place}` : ''}`);
       }
     }
     if (r.nationalities.length > 0)
-      lines.push(`\n**Nationalities:** ${r.nationalities.join(", ")}`);
+      lines.push(`\n**Nationalities:** ${r.nationalities.join(', ')}`);
     if (r.vesselDetails) {
-      lines.push("\n## Vessel details");
-      if (r.vesselDetails.flag)
-        lines.push(`- **Flag:** ${r.vesselDetails.flag}`);
+      lines.push('\n## Vessel details');
+      if (r.vesselDetails.flag) lines.push(`- **Flag:** ${r.vesselDetails.flag}`);
       if (r.vesselDetails.formerFlags.length > 0) {
-        lines.push(
-          `- **Former flags:** ${r.vesselDetails.formerFlags.join(", ")}`,
-        );
+        lines.push(`- **Former flags:** ${r.vesselDetails.formerFlags.join(', ')}`);
       }
       if (r.vesselDetails.vesselType) {
         lines.push(`- **Vessel type:** ${r.vesselDetails.vesselType}`);
       }
       if (r.vesselDetails.callSigns.length > 0) {
-        lines.push(`- **Call signs:** ${r.vesselDetails.callSigns.join(", ")}`);
+        lines.push(`- **Call signs:** ${r.vesselDetails.callSigns.join(', ')}`);
       }
-      if (r.vesselDetails.tonnage)
-        lines.push(`- **Tonnage:** ${r.vesselDetails.tonnage}`);
+      if (r.vesselDetails.tonnage) lines.push(`- **Tonnage:** ${r.vesselDetails.tonnage}`);
       if (r.vesselDetails.grossRegisteredTonnage) {
-        lines.push(
-          `- **Gross registered tonnage:** ${r.vesselDetails.grossRegisteredTonnage}`,
-        );
+        lines.push(`- **Gross registered tonnage:** ${r.vesselDetails.grossRegisteredTonnage}`);
       }
     }
     if (r.remarks) lines.push(`\n**Remarks:** ${r.remarks}`);
     lines.push(`\n> ${r.caveat}`);
-    return [{ type: "text", text: lines.join("\n") }];
+    return [{ type: 'text', text: lines.join('\n') }];
   },
 });

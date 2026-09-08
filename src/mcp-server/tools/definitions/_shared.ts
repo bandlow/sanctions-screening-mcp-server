@@ -8,11 +8,8 @@
  * @module mcp-server/tools/definitions/_shared
  */
 
-import {
-  DEFAULT_SOURCE_URLS,
-  getServerConfig,
-} from "@/config/server-config.js";
-import type { SourceCode } from "@/services/screening/types.js";
+import { DEFAULT_SOURCE_URLS, getServerConfig } from '@/config/server-config.js';
+import type { SourceCode } from '@/services/screening/types.js';
 
 /**
  * The decision-support caveat carried in every screening tool's output. States
@@ -20,26 +17,25 @@ import type { SourceCode } from "@/services/screening/types.js";
  * is not a finding of fact, and an empty result is not a clearance.
  */
 export const SCREENING_CAVEAT =
-  "Screening aid, not a compliance determination. Results are potential matches to verify against the official source — a hit is not a finding of fact, and an empty result is not a clearance. Real sanctions compliance is a legal process this server feeds, not one it performs.";
+  'Screening aid, not a compliance determination. Results are potential matches to verify against the official source — a hit is not a finding of fact, and an empty result is not a clearance. Real sanctions compliance is a legal process this server feeds, not one it performs.';
 
 /** Redistribution terms per sanctions source, surfaced for attribution. */
 export const SOURCE_LICENSES: Record<SourceCode, string> = {
-  ofac_sdn: "US Government public domain",
-  ofac_consolidated: "US Government public domain",
-  eu: "EU consolidated list — freely redistributable",
-  uk: "Open Government Licence v3.0 (attribution required)",
-  un: "Freely redistributable",
-  us_bis_entity: "US Government public domain (BIS)",
-  us_bis_dpl: "US Government public domain (BIS)",
-  us_bis_unverified: "US Government public domain (BIS)",
+  ofac_sdn: 'US Government public domain',
+  ofac_consolidated: 'US Government public domain',
+  eu: 'EU consolidated list — freely redistributable',
+  uk: 'Open Government Licence v3.0 (attribution required)',
+  un: 'Freely redistributable',
+  us_bis_entity: 'US Government public domain (BIS)',
+  us_bis_dpl: 'US Government public domain (BIS)',
+  us_bis_unverified: 'US Government public domain (BIS)',
 };
 
 /** GLEIF golden copy is CC0 — cited but no attribution required. */
-export const GLEIF_LICENSE = "CC0 1.0 Universal (public domain)";
+export const GLEIF_LICENSE = 'CC0 1.0 Universal (public domain)';
 
 /** Display label for the synthetic GLEIF row in the sources listing. */
-export const GLEIF_SOURCE_LABEL =
-  "GLEIF LEI (Level 1 entities + Level 2 ownership)";
+export const GLEIF_SOURCE_LABEL = 'GLEIF LEI (Level 1 entities + Level 2 ownership)';
 
 /**
  * The upstream URL each sanctions source is harvested from. Read from config
@@ -54,15 +50,14 @@ export function sourceUrls(): Record<SourceCode, string> {
     eu: cfg.euFsfUrl,
     uk: cfg.ukSanctionsUrl,
     un: cfg.unScUrl,
-    us_bis_entity: cfg.bisEntityUrl || "not-configured://bis-entity",
-    us_bis_dpl: cfg.bisDplUrl || "not-configured://bis-dpl",
-    us_bis_unverified:
-      cfg.bisUnverifiedUrl || "not-configured://bis-unverified",
+    us_bis_entity: cfg.bisEntityUrl || 'not-configured://bis-entity',
+    us_bis_dpl: cfg.bisDplUrl || 'not-configured://bis-dpl',
+    us_bis_unverified: cfg.bisUnverifiedUrl || 'not-configured://bis-unverified',
   };
 }
 
 /** The configured GLEIF golden-copy endpoint, alongside the public default it may override. */
 export function gleifSourceUrl(): string {
-  const base = getServerConfig().gleifGoldenCopyBaseUrl.replace(/\/$/, "");
+  const base = getServerConfig().gleifGoldenCopyBaseUrl.replace(/\/$/, '');
   return `${base} (golden copy) — default ${DEFAULT_SOURCE_URLS.gleifGoldenCopyBase}`;
 }

@@ -8,49 +8,44 @@
 
 /** Source list codes — the value stored in `designation.source`. */
 export type SourceCode =
-  | "ofac_sdn"
-  | "ofac_consolidated"
-  | "eu"
-  | "uk"
-  | "un"
-  | "us_bis_entity"
-  | "us_bis_dpl"
-  | "us_bis_unverified";
+  | 'ofac_sdn'
+  | 'ofac_consolidated'
+  | 'eu'
+  | 'uk'
+  | 'un'
+  | 'us_bis_entity'
+  | 'us_bis_dpl'
+  | 'us_bis_unverified';
 
 /** All sanctions source codes, in display order. */
 export const SOURCE_CODES: readonly SourceCode[] = [
-  "ofac_sdn",
-  "ofac_consolidated",
-  "eu",
-  "uk",
-  "un",
-  "us_bis_entity",
-  "us_bis_dpl",
-  "us_bis_unverified",
+  'ofac_sdn',
+  'ofac_consolidated',
+  'eu',
+  'uk',
+  'un',
+  'us_bis_entity',
+  'us_bis_dpl',
+  'us_bis_unverified',
 ] as const;
 
 /** Human-facing label per source, used in provenance and `sanctions_list_sources`. */
 export const SOURCE_LABELS: Record<SourceCode, string> = {
-  ofac_sdn: "OFAC Specially Designated Nationals (SDN) List",
-  ofac_consolidated: "OFAC Consolidated Sanctions List",
-  eu: "EU Consolidated Financial Sanctions List",
-  uk: "UK Sanctions List (FCDO)",
-  un: "UN Security Council Consolidated List",
-  us_bis_entity: "US BIS Entity List",
-  us_bis_dpl: "US BIS Denied Persons List (DPL)",
-  us_bis_unverified: "US BIS Unverified List",
+  ofac_sdn: 'OFAC Specially Designated Nationals (SDN) List',
+  ofac_consolidated: 'OFAC Consolidated Sanctions List',
+  eu: 'EU Consolidated Financial Sanctions List',
+  uk: 'UK Sanctions List (FCDO)',
+  un: 'UN Security Council Consolidated List',
+  us_bis_entity: 'US BIS Entity List',
+  us_bis_dpl: 'US BIS Denied Persons List (DPL)',
+  us_bis_unverified: 'US BIS Unverified List',
 };
 
 /** Coarse entity classification shared across all sources. */
-export type EntityType =
-  | "person"
-  | "organization"
-  | "vessel"
-  | "aircraft"
-  | "unknown";
+export type EntityType = 'person' | 'organization' | 'vessel' | 'aircraft' | 'unknown';
 
 /** Name-record provenance within a designation. */
-export type NameType = "primary" | "aka" | "fka" | "low-quality-aka";
+export type NameType = 'primary' | 'aka' | 'fka' | 'low-quality-aka';
 
 /** One name or alias attached to a designation. */
 export interface NameRecord {
@@ -176,7 +171,7 @@ export interface NormalizedLeiRelationship {
 }
 
 /** Match classification, in descending confidence. */
-export type MatchType = "exact" | "strong" | "approximate";
+export type MatchType = 'exact' | 'strong' | 'approximate';
 
 /**
  * How much of a multi-token query a candidate actually explains: a literal count
@@ -198,7 +193,7 @@ export interface QueryTokenCoverage {
 }
 
 /** The two screening match modes. */
-export type MatchMode = "strict" | "fuzzy";
+export type MatchMode = 'strict' | 'fuzzy';
 
 /** A scored screening hit returned by the matching engine. */
 export interface ScreeningHit {

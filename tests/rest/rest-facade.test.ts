@@ -4,83 +4,80 @@
  * @module tests/rest/rest-facade.test
  */
 
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { NormalizedDesignation } from "@/services/screening/types.js";
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { NormalizedDesignation } from '@/services/screening/types.js';
 
 interface ComplianceCaseSummary {
-  caseId: string;
   bpId: string;
-  status: "open" | "in_review" | "pending_approval" | "closed";
+  caseId: string;
   hitCount: number;
+  status: 'open' | 'in_review' | 'pending_approval' | 'closed';
 }
 
 interface ComplianceCaseDecisionResponse {
   caseId: string;
-  status: "open" | "in_review" | "pending_approval" | "closed";
   decision: {
-    decision: "confirmed_match" | "false_positive" | "escalate";
+    decision: 'confirmed_match' | 'false_positive' | 'escalate';
     decidedBy: string;
     proposedBy: string;
     approvedBy?: string;
-    approvalStatus: "not_required" | "pending" | "approved";
+    approvalStatus: 'not_required' | 'pending' | 'approved';
   };
+  status: 'open' | 'in_review' | 'pending_approval' | 'closed';
 }
 
 const httpPort = 38010;
 const restBaseUrl = `http://127.0.0.1:${httpPort + 1}`;
 
 const REST_VESSEL_FIXTURE: NormalizedDesignation = {
-  id: "ofac_sdn:FX-REST-VESSEL-1",
-  source: "ofac_sdn",
-  sourceEntryId: "FX-REST-VESSEL-1",
-  entityType: "vessel",
-  primaryName: "MV REST FACADE TEST",
-  program: "TEST-VESSEL",
-  designationDate: "2026-09-07",
+  id: 'ofac_sdn:FX-REST-VESSEL-1',
+  source: 'ofac_sdn',
+  sourceEntryId: 'FX-REST-VESSEL-1',
+  entityType: 'vessel',
+  primaryName: 'MV REST FACADE TEST',
+  program: 'TEST-VESSEL',
+  designationDate: '2026-09-07',
   payload: {
-    aliases: [{ name: "REST TEST SHIP", nameType: "aka" }],
-    identifiers: [
-      { type: "Vessel Registration Identification", value: "IMO 9218478" },
-    ],
+    aliases: [{ name: 'REST TEST SHIP', nameType: 'aka' }],
+    identifiers: [{ type: 'Vessel Registration Identification', value: 'IMO 9218478' }],
     addresses: [],
     datesOfBirth: [],
     nationalities: [],
     vesselDetails: {
-      flag: "Iran",
-      formerFlags: ["Malta"],
-      vesselType: "Crude Oil Tanker",
-      callSigns: ["9HEG9"],
-      tonnage: "297013",
+      flag: 'Iran',
+      formerFlags: ['Malta'],
+      vesselType: 'Crude Oil Tanker',
+      callSigns: ['9HEG9'],
+      tonnage: '297013',
     },
   },
 };
 
 let stopRestFacade: (() => Promise<void>) | undefined;
-let tempDir = "";
+let tempDir = '';
 let closeScreeningService: (() => Promise<void>) | undefined;
 let resetScreeningServiceFn: (() => void) | undefined;
 let resetServerConfigFn: (() => void) | undefined;
 
 beforeAll(async () => {
-  process.env.MCP_TRANSPORT_TYPE = "http";
-  process.env.MCP_HTTP_HOST = "127.0.0.1";
+  process.env.MCP_TRANSPORT_TYPE = 'http';
+  process.env.MCP_HTTP_HOST = '127.0.0.1';
   process.env.MCP_HTTP_PORT = String(httpPort);
-  tempDir = mkdtempSync(join(tmpdir(), "sanctions-rest-test-"));
-  process.env.SANCTIONS_MIRROR_PATH = join(tempDir, "test.db");
+  tempDir = mkdtempSync(join(tmpdir(), 'sanctions-rest-test-'));
+  process.env.SANCTIONS_MIRROR_PATH = join(tempDir, 'test.db');
 
   vi.resetModules();
 
-  const { resetServerConfig } = await import("@/config/server-config.js");
-  const { getScreeningService, initScreeningService, resetScreeningService } =
-    await import("@/services/screening/screening-service.js");
-  const {
-    FIXTURE_DESIGNATIONS,
-    FIXTURE_LEI_ENTITIES,
-    FIXTURE_LEI_RELATIONSHIPS,
-  } = await import("@/services/screening/fixtures.js");
+  const { resetServerConfig } = await import('@/config/server-config.js');
+  const { getScreeningService, initScreeningService, resetScreeningService } = await import(
+    '@/services/screening/screening-service.js'
+  );
+  const { FIXTURE_DESIGNATIONS, FIXTURE_LEI_ENTITIES, FIXTURE_LEI_RELATIONSHIPS } = await import(
+    '@/services/screening/fixtures.js'
+  );
 
   resetServerConfig();
   resetScreeningService();
@@ -96,7 +93,7 @@ beforeAll(async () => {
   resetScreeningServiceFn = resetScreeningService;
   resetServerConfigFn = resetServerConfig;
 
-  const rest = await import("@/rest/rest-facade.js");
+  const rest = await import('@/rest/rest-facade.js');
   stopRestFacade = rest.stopRestFacade;
   await rest.startRestFacade();
 }, 30_000);
@@ -125,11 +122,9 @@ afterAll(async () => {
   vi.resetModules();
 });
 
-describe("REST facade compliance-case endpoints", () => {
-  it("returns designation details including vessel metadata via REST", async () => {
-    const response = await fetch(
-      `${restBaseUrl}/api/v1/designations/ofac_sdn/FX-REST-VESSEL-1`,
-    );
+describe('REST facade compliance-case endpoints', () => {
+  it('returns designation details including vessel metadata via REST', async () => {
+    const response = await fetch(`${restBaseUrl}/api/v1/designations/ofac_sdn/FX-REST-VESSEL-1`);
     const payload = (await response.json()) as {
       designation: {
         source: string;
@@ -146,75 +141,78 @@ describe("REST facade compliance-case endpoints", () => {
     };
 
     expect(response.status).toBe(200);
-    expect(payload.designation.source).toBe("ofac_sdn");
-    expect(payload.designation.sourceEntryId).toBe("FX-REST-VESSEL-1");
-    expect(payload.designation.entityType).toBe("vessel");
+    expect(payload.designation.source).toBe('ofac_sdn');
+    expect(payload.designation.sourceEntryId).toBe('FX-REST-VESSEL-1');
+    expect(payload.designation.entityType).toBe('vessel');
     expect(payload.designation.vesselDetails).toEqual({
-      flag: "Iran",
-      formerFlags: ["Malta"],
-      vesselType: "Crude Oil Tanker",
-      callSigns: ["9HEG9"],
-      tonnage: "297013",
+      flag: 'Iran',
+      formerFlags: ['Malta'],
+      vesselType: 'Crude Oil Tanker',
+      callSigns: ['9HEG9'],
+      tonnage: '297013',
     });
   });
 
-  it("returns designation_not_found for unknown designation details", async () => {
-    const response = await fetch(
-      `${restBaseUrl}/api/v1/designations/ofac_sdn/DOES-NOT-EXIST`,
-    );
+  it('returns designation_not_found for unknown designation details', async () => {
+    const response = await fetch(`${restBaseUrl}/api/v1/designations/ofac_sdn/DOES-NOT-EXIST`);
     const payload = (await response.json()) as {
       error: { code: string; message: string };
     };
 
     expect(response.status).toBe(404);
-    expect(payload.error.code).toBe("designation_not_found");
+    expect(payload.error.code).toBe('designation_not_found');
   });
 
-  it("serves OpenAPI YAML and Swagger UI endpoints", async () => {
+  it('serves OpenAPI YAML and Swagger UI endpoints', async () => {
     const specResponse = await fetch(`${restBaseUrl}/api/v1/openapi.yaml`);
     const specBody = await specResponse.text();
 
     expect(specResponse.status).toBe(200);
-    expect(specResponse.headers.get("content-type")).toContain(
-      "application/yaml",
-    );
-    expect(specBody).toContain("openapi: 3.1.0");
-    expect(specBody).toContain("/screening/business-partner");
-    expect(specBody).toContain("/designations/{source}/{entryId}");
+    expect(specResponse.headers.get('content-type')).toContain('application/yaml');
+    expect(specBody).toContain('openapi: 3.1.0');
+    expect(specBody).toContain('/screening/business-partner');
+    expect(specBody).toContain('/designations/{source}/{entryId}');
 
     const uiResponse = await fetch(`${restBaseUrl}/ui/swagger`);
     const uiBody = await uiResponse.text();
 
     expect(uiResponse.status).toBe(200);
-    expect(uiResponse.headers.get("content-type")).toContain("text/html");
-    expect(uiBody).toContain("SwaggerUIBundle");
-    expect(uiBody).toContain("/api/v1/openapi.yaml");
+    expect(uiResponse.headers.get('content-type')).toContain('text/html');
+    expect(uiBody).toContain('SwaggerUIBundle');
+    expect(uiBody).toContain('/api/v1/openapi.yaml');
+    expect(uiBody).toContain('/ui/swagger-ui.css');
+    expect(uiBody).toContain('/ui/swagger-ui-bundle.js');
+
+    const cssResponse = await fetch(`${restBaseUrl}/ui/swagger-ui.css`);
+    expect(cssResponse.status).toBe(200);
+    expect(cssResponse.headers.get('content-type')).toContain('text/css');
+
+    const bundleResponse = await fetch(`${restBaseUrl}/ui/swagger-ui-bundle.js`);
+    expect(bundleResponse.status).toBe(200);
+    expect(bundleResponse.headers.get('content-type')).toContain('application/javascript');
   });
 
-  it("serves the compliance worklist UI route", async () => {
+  it('serves the compliance worklist UI route', async () => {
     const response = await fetch(`${restBaseUrl}/ui/compliance-cases`);
     const body = await response.text();
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("text/html");
-    expect(body).toContain("Compliance Case Worklist");
+    expect(response.headers.get('content-type')).toContain('text/html');
+    expect(body).toContain('Compliance Case Worklist');
   });
 
-  it("creates a case from screening hits and exposes it via list/detail APIs", async () => {
-    const screeningResponse = await fetch(
-      `${restBaseUrl}/api/v1/screening/business-partner`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bpId: "BP-CASE-1001",
-          name: "Ivan Testovich Volkov",
-          role: "vendor",
-          country: "DE",
-          matchMode: "strict",
-        }),
-      },
-    );
+  it('creates a case from screening hits and exposes it via list/detail APIs', async () => {
+    const screeningResponse = await fetch(`${restBaseUrl}/api/v1/screening/business-partner`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        bpId: 'BP-CASE-1001',
+        name: 'Ivan Testovich Volkov',
+        role: 'vendor',
+        country: 'DE',
+        matchMode: 'strict',
+      }),
+    });
 
     const screeningPayload = (await screeningResponse.json()) as {
       caveat: string;
@@ -223,21 +221,17 @@ describe("REST facade compliance-case endpoints", () => {
 
     expect(screeningResponse.status).toBe(200);
     expect(screeningPayload.hits.length).toBeGreaterThan(0);
-    expect(screeningPayload.caveat).toContain("not a compliance determination");
+    expect(screeningPayload.caveat).toContain('not a compliance determination');
 
-    const listResponse = await fetch(
-      `${restBaseUrl}/api/v1/compliance/cases?status=open`,
-    );
+    const listResponse = await fetch(`${restBaseUrl}/api/v1/compliance/cases?status=open`);
     const listPayload = (await listResponse.json()) as {
       cases: ComplianceCaseSummary[];
     };
 
     expect(listResponse.status).toBe(200);
-    const createdCase = listPayload.cases.find(
-      (item) => item.bpId === "BP-CASE-1001",
-    );
+    const createdCase = listPayload.cases.find((item) => item.bpId === 'BP-CASE-1001');
     expect(createdCase).toBeDefined();
-    expect(createdCase?.status).toBe("open");
+    expect(createdCase?.status).toBe('open');
     expect((createdCase?.hitCount ?? 0) > 0).toBe(true);
 
     const detailResponse = await fetch(
@@ -253,43 +247,39 @@ describe("REST facade compliance-case endpoints", () => {
     };
 
     expect(detailResponse.status).toBe(200);
-    expect(detailPayload.case.bpId).toBe("BP-CASE-1001");
+    expect(detailPayload.case.bpId).toBe('BP-CASE-1001');
     expect(detailPayload.case.hits.length).toBeGreaterThan(0);
-    expect(detailPayload.case.hits[0]?.reviewStatus).toBe("open");
+    expect(detailPayload.case.hits[0]?.reviewStatus).toBe('open');
   });
 
-  it("enforces the four-eyes guardrail and accepts approved decisions", async () => {
+  it('enforces the four-eyes guardrail and accepts approved decisions', async () => {
     await fetch(`${restBaseUrl}/api/v1/screening/business-partner`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        bpId: "BP-CASE-1002",
-        name: "Ivan Testovich Volkov",
-        matchMode: "strict",
+        bpId: 'BP-CASE-1002',
+        name: 'Ivan Testovich Volkov',
+        matchMode: 'strict',
       }),
     });
 
-    const listResponse = await fetch(
-      `${restBaseUrl}/api/v1/compliance/cases?status=open`,
-    );
+    const listResponse = await fetch(`${restBaseUrl}/api/v1/compliance/cases?status=open`);
     const listPayload = (await listResponse.json()) as {
       cases: ComplianceCaseSummary[];
     };
-    const targetCase = listPayload.cases.find(
-      (item) => item.bpId === "BP-CASE-1002",
-    );
+    const targetCase = listPayload.cases.find((item) => item.bpId === 'BP-CASE-1002');
     expect(targetCase).toBeDefined();
 
     const invalidDecisionResponse = await fetch(
       `${restBaseUrl}/api/v1/compliance/cases/${targetCase?.caseId}/decision`,
       {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          decision: "confirmed_match",
-          decidedBy: "alice",
-          proposedBy: "alice",
-          approvedBy: "alice",
+          decision: 'confirmed_match',
+          decidedBy: 'alice',
+          proposedBy: 'alice',
+          approvedBy: 'alice',
         }),
       },
     );
@@ -299,20 +289,20 @@ describe("REST facade compliance-case endpoints", () => {
     };
 
     expect(invalidDecisionResponse.status).toBe(400);
-    expect(invalidDecisionPayload.error.code).toBe("validation_error");
-    expect(invalidDecisionPayload.error.message).toContain("Four-eyes rule");
+    expect(invalidDecisionPayload.error.code).toBe('validation_error');
+    expect(invalidDecisionPayload.error.message).toContain('Four-eyes rule');
 
     const validDecisionResponse = await fetch(
       `${restBaseUrl}/api/v1/compliance/cases/${targetCase?.caseId}/decision`,
       {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          decision: "confirmed_match",
-          decidedBy: "alice",
-          proposedBy: "alice",
-          approvedBy: "bob",
-          comment: "Potential true positive confirmed for review workflow.",
+          decision: 'confirmed_match',
+          decidedBy: 'alice',
+          proposedBy: 'alice',
+          approvedBy: 'bob',
+          comment: 'Potential true positive confirmed for review workflow.',
         }),
       },
     );
@@ -321,56 +311,52 @@ describe("REST facade compliance-case endpoints", () => {
       (await validDecisionResponse.json()) as ComplianceCaseDecisionResponse;
 
     expect(validDecisionResponse.status).toBe(200);
-    expect(validDecisionPayload.status).toBe("closed");
-    expect(validDecisionPayload.decision.decision).toBe("confirmed_match");
-    expect(validDecisionPayload.decision.approvalStatus).toBe("approved");
+    expect(validDecisionPayload.status).toBe('closed');
+    expect(validDecisionPayload.decision.decision).toBe('confirmed_match');
+    expect(validDecisionPayload.decision.approvalStatus).toBe('approved');
 
     const detailResponse = await fetch(
       `${restBaseUrl}/api/v1/compliance/cases/${targetCase?.caseId}`,
     );
     const detailPayload = (await detailResponse.json()) as {
       case: {
-        status: "open" | "in_review" | "pending_approval" | "closed";
+        status: 'open' | 'in_review' | 'pending_approval' | 'closed';
         hits: Array<{ reviewStatus: string }>;
       };
     };
 
     expect(detailResponse.status).toBe(200);
-    expect(detailPayload.case.status).toBe("closed");
-    expect(
-      detailPayload.case.hits.every(
-        (hit) => hit.reviewStatus === "confirmed_match",
-      ),
-    ).toBe(true);
+    expect(detailPayload.case.status).toBe('closed');
+    expect(detailPayload.case.hits.every((hit) => hit.reviewStatus === 'confirmed_match')).toBe(
+      true,
+    );
   });
 
-  it("returns validation_error for unknown case-status filters", async () => {
-    const response = await fetch(
-      `${restBaseUrl}/api/v1/compliance/cases?status=unknown-status`,
-    );
+  it('returns validation_error for unknown case-status filters', async () => {
+    const response = await fetch(`${restBaseUrl}/api/v1/compliance/cases?status=unknown-status`);
     const payload = (await response.json()) as {
       error: { code: string; message: string };
     };
 
     expect(response.status).toBe(400);
-    expect(payload.error.code).toBe("validation_error");
-    expect(payload.error.message).toContain("status");
+    expect(payload.error.code).toBe('validation_error');
+    expect(payload.error.message).toContain('status');
   });
 
-  it("accepts ECC realtime trigger payloads and returns screening candidates", async () => {
+  it('accepts ECC realtime trigger payloads and returns screening candidates', async () => {
     const response = await fetch(
       `${restBaseUrl}/api/v1/integration/sap/ecc/business-partner-changed`,
       {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sourceSystem: "ecc",
-          triggerType: "badi",
+          sourceSystem: 'ecc',
+          triggerType: 'badi',
           businessPartner: {
-            bpId: "BP-SAP-ECC-1001",
-            name: "Ivan Testovich Volkov",
-            country: "DE",
-            role: "vendor",
+            bpId: 'BP-SAP-ECC-1001',
+            name: 'Ivan Testovich Volkov',
+            country: 'DE',
+            role: 'vendor',
           },
         }),
       },
@@ -382,28 +368,28 @@ describe("REST facade compliance-case endpoints", () => {
     };
 
     expect(response.status).toBe(200);
-    expect(payload.integration.sourceSystem).toBe("ecc");
-    expect(payload.integration.mode).toBe("realtime");
-    expect(payload.integration.triggerType).toBe("badi");
+    expect(payload.integration.sourceSystem).toBe('ecc');
+    expect(payload.integration.mode).toBe('realtime');
+    expect(payload.integration.triggerType).toBe('badi');
     expect(payload.result.hits.length).toBeGreaterThan(0);
-    expect(payload.result.caveat).toContain("not a compliance determination");
+    expect(payload.result.caveat).toContain('not a compliance determination');
   });
 
-  it("accepts S/4 realtime event payloads and SAP batch payloads", async () => {
+  it('accepts S/4 realtime event payloads and SAP batch payloads', async () => {
     const realtimeResponse = await fetch(
       `${restBaseUrl}/api/v1/integration/sap/s4/business-partner-changed`,
       {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sourceSystem: "s4hana",
-          eventType: "sap.s4.beh.businesspartner.v1.BusinessPartner.Changed.v1",
-          eventId: "evt-1001",
+          sourceSystem: 's4hana',
+          eventType: 'sap.s4.beh.businesspartner.v1.BusinessPartner.Changed.v1',
+          eventId: 'evt-1001',
           businessPartner: {
-            bpId: "BP-SAP-S4-1001",
-            name: "Ivan Testovich Volkov",
-            country: "DE",
-            role: "customer",
+            bpId: 'BP-SAP-S4-1001',
+            name: 'Ivan Testovich Volkov',
+            country: 'DE',
+            role: 'customer',
           },
         }),
       },
@@ -415,31 +401,31 @@ describe("REST facade compliance-case endpoints", () => {
     };
 
     expect(realtimeResponse.status).toBe(200);
-    expect(realtimePayload.integration.sourceSystem).toBe("s4hana");
-    expect(realtimePayload.integration.mode).toBe("realtime");
-    expect(realtimePayload.integration.eventType).toContain("BusinessPartner");
+    expect(realtimePayload.integration.sourceSystem).toBe('s4hana');
+    expect(realtimePayload.integration.mode).toBe('realtime');
+    expect(realtimePayload.integration.eventType).toContain('BusinessPartner');
     expect(realtimePayload.result.hits.length).toBeGreaterThan(0);
 
     const batchResponse = await fetch(
       `${restBaseUrl}/api/v1/integration/sap/batch-business-partners`,
       {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          sourceSystem: "ecc",
-          triggeredBy: "nightly-batch-job",
+          sourceSystem: 'ecc',
+          triggeredBy: 'nightly-batch-job',
           items: [
             {
-              bpId: "BP-SAP-BATCH-1001",
-              name: "Ivan Testovich Volkov",
-              country: "DE",
-              role: "vendor",
+              bpId: 'BP-SAP-BATCH-1001',
+              name: 'Ivan Testovich Volkov',
+              country: 'DE',
+              role: 'vendor',
             },
             {
-              bpId: "BP-SAP-BATCH-1002",
-              name: "ACME Trading LLC",
-              country: "US",
-              role: "customer",
+              bpId: 'BP-SAP-BATCH-1002',
+              name: 'ACME Trading LLC',
+              country: 'US',
+              role: 'customer',
             },
           ],
         }),
@@ -455,10 +441,10 @@ describe("REST facade compliance-case endpoints", () => {
     };
 
     expect(batchResponse.status).toBe(202);
-    expect(batchPayload.integration.sourceSystem).toBe("ecc");
-    expect(batchPayload.integration.mode).toBe("batch");
-    expect(batchPayload.integration.triggeredBy).toBe("nightly-batch-job");
-    expect(batchPayload.status).toBe("accepted");
+    expect(batchPayload.integration.sourceSystem).toBe('ecc');
+    expect(batchPayload.integration.mode).toBe('batch');
+    expect(batchPayload.integration.triggeredBy).toBe('nightly-batch-job');
+    expect(batchPayload.status).toBe('accepted');
     expect(batchPayload.acceptedCount).toBe(2);
     expect(batchPayload.processedCount + batchPayload.failedCount).toBe(2);
   });

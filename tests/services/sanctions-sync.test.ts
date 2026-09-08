@@ -171,7 +171,7 @@ async function drainSync(
 
 /** The no-op deferred-field sink; the sanctions sync requires one. */
 function noopSync(): ReturnType<typeof createSanctionsSync> {
-  return createSanctionsSync({ applyDeferredFields: async () => { } });
+  return createSanctionsSync({ applyDeferredFields: async () => {} });
 }
 
 afterEach(() => {
@@ -253,7 +253,7 @@ describe('createSanctionsSync — harvest loop contract', () => {
     const reports: { accepted: number; rejected: object; source: SourceCode }[] = [];
     await drainSync(
       createSanctionsSync({
-        applyDeferredFields: async () => { },
+        applyDeferredFields: async () => {},
         onSourceReport: (report) => reports.push(report),
       }),
     );

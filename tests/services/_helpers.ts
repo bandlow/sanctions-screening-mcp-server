@@ -5,22 +5,22 @@
  * @module tests/services/_helpers
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { resetServerConfig } from "@/config/server-config.js";
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { resetServerConfig } from '@/config/server-config.js';
 import {
   FIXTURE_DESIGNATIONS,
   FIXTURE_LEI_ENTITIES,
   FIXTURE_LEI_RELATIONSHIPS,
-} from "@/services/screening/fixtures.js";
+} from '@/services/screening/fixtures.js';
 import {
   buildScreeningService,
   getScreeningService,
   initScreeningService,
   resetScreeningService,
   type ScreeningService,
-} from "@/services/screening/screening-service.js";
+} from '@/services/screening/screening-service.js';
 
 /** A seeded service plus its temp dir and a cleanup fn. */
 export interface SeededService {
@@ -51,8 +51,8 @@ function cleanupTempDir(dir: string): void {
  * config first so `SANCTIONS_MIRROR_PATH` takes effect.
  */
 export async function seededService(): Promise<SeededService> {
-  const dir = mkdtempSync(join(tmpdir(), "sanctions-test-"));
-  process.env.SANCTIONS_MIRROR_PATH = join(dir, "test.db");
+  const dir = mkdtempSync(join(tmpdir(), 'sanctions-test-'));
+  process.env.SANCTIONS_MIRROR_PATH = join(dir, 'test.db');
   resetServerConfig();
 
   const service = buildScreeningService();
@@ -79,8 +79,8 @@ export async function seededService(): Promise<SeededService> {
  * lifecycle tests that assert readiness-gated behavior.
  */
 export async function freshService(): Promise<SeededService> {
-  const dir = mkdtempSync(join(tmpdir(), "sanctions-test-"));
-  process.env.SANCTIONS_MIRROR_PATH = join(dir, "fresh.db");
+  const dir = mkdtempSync(join(tmpdir(), 'sanctions-test-'));
+  process.env.SANCTIONS_MIRROR_PATH = join(dir, 'fresh.db');
   resetServerConfig();
 
   const service = buildScreeningService();
@@ -101,8 +101,8 @@ export async function freshService(): Promise<SeededService> {
  * `getScreeningService()`) against a fresh temp DB. Use for tool-level tests.
  */
 export async function seededGlobalService(): Promise<SeededService> {
-  const dir = mkdtempSync(join(tmpdir(), "sanctions-test-"));
-  process.env.SANCTIONS_MIRROR_PATH = join(dir, "test.db");
+  const dir = mkdtempSync(join(tmpdir(), 'sanctions-test-'));
+  process.env.SANCTIONS_MIRROR_PATH = join(dir, 'test.db');
   resetServerConfig();
   resetScreeningService();
   initScreeningService();
@@ -132,8 +132,8 @@ export async function seededGlobalService(): Promise<SeededService> {
  * completed a sync, so `ready()` is false.
  */
 export async function emptyGlobalService(): Promise<SeededService> {
-  const dir = mkdtempSync(join(tmpdir(), "sanctions-test-"));
-  process.env.SANCTIONS_MIRROR_PATH = join(dir, "empty.db");
+  const dir = mkdtempSync(join(tmpdir(), 'sanctions-test-'));
+  process.env.SANCTIONS_MIRROR_PATH = join(dir, 'empty.db');
   resetServerConfig();
   resetScreeningService();
   initScreeningService();
