@@ -13,6 +13,7 @@ import { getEntityTool } from '@/mcp-server/tools/definitions/get-entity.tool.js
 import { listSourcesTool } from '@/mcp-server/tools/definitions/list-sources.tool.js';
 import { resolveEntityTool } from '@/mcp-server/tools/definitions/resolve-entity.tool.js';
 import { screenNameTool } from '@/mcp-server/tools/definitions/screen-name.tool.js';
+import { searchIdentifierTool } from '@/mcp-server/tools/definitions/search-identifier.tool.js';
 import { traceOwnershipTool } from '@/mcp-server/tools/definitions/trace-ownership.tool.js';
 import {
   emptyGlobalService,
@@ -70,6 +71,30 @@ describe('screening tools (seeded)', () => {
     await expect(
       getDesignationTool.handler(input, ctxFor(getDesignationTool.errors)),
     ).rejects.toMatchObject({ data: { reason: 'designation_not_found' } });
+  });
+
+  it('search_identifier finds published identifiers by exact value or contained number', async () => {
+    const imo = await searchIdentifierTool.handler(
+      searchIdentifierTool.input.parse({ identifier: '1234567', identifierType: 'IMO' }),
+      ctxFor(searchIdentifierTool.errors),
+    );
+    expect(imo.hits[0]).toMatchObject({
+      source: 'uk',
+      sourceEntryId: 'FX-4004',
+      primaryName: 'MV Phantom Voyager',
+      identifier: { type: 'IMO', value: '1234567' },
+      matchType: 'exact',
+    });
+
+    const passport = await searchIdentifierTool.handler(
+      searchIdentifierTool.input.parse({ identifier: 'X1234567' }),
+      ctxFor(searchIdentifierTool.errors),
+    );
+    expect(passport.hits[0]).toMatchObject({
+      source: 'ofac_sdn',
+      sourceEntryId: 'FX-1001',
+      identifier: { type: 'Passport', value: 'X1234567', country: 'Testland' },
+    });
   });
 
   it('list_sources reports counts, readiness, and licenses', async () => {
@@ -244,6 +269,13 @@ describe('screening tools (not ready)', () => {
     const input = resolveEntityTool.input.parse({ name: 'anyone' });
     await expect(
       resolveEntityTool.handler(input, ctxFor(resolveEntityTool.errors)),
+    ).rejects.toMatchObject({ data: { reason: 'mirror_not_ready' } });
+  });
+
+  it('search_identifier throws the mirror-not-ready contract before any sync', async () => {
+    const input = searchIdentifierTool.input.parse({ identifier: '1234567' });
+    await expect(
+      searchIdentifierTool.handler(input, ctxFor(searchIdentifierTool.errors)),
     ).rejects.toMatchObject({ data: { reason: 'mirror_not_ready' } });
   });
 });

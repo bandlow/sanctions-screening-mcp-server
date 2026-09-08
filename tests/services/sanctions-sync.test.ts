@@ -29,16 +29,33 @@ import { freshService, type SeededService } from './_helpers.js';
 /** The reference value sets an OFAC advanced document opens with. */
 const OFAC_REFS = `<ReferenceValueSets>
   <AliasTypeValues><AliasType ID="1403">Name</AliasType><AliasType ID="1400">A.K.A.</AliasType></AliasTypeValues>
-  <FeatureTypeValues><FeatureType ID="8">Birthdate</FeatureType></FeatureTypeValues>
+  <IDRegDocTypeValues><IDRegDocType ID="1626">Vessel Registration Identification</IDRegDocType></IDRegDocTypeValues>
+  <FeatureTypeValues><FeatureType ID="8">Birthdate</FeatureType><FeatureType ID="25">Location</FeatureType></FeatureTypeValues>
+  <LocPartTypeValues><LocPartType ID="1451">ADDRESS1</LocPartType><LocPartType ID="1454">CITY</LocPartType></LocPartTypeValues>
+  <CountryValues><Country ID="11171" ISO2="RU">Russia</Country></CountryValues>
   <PartySubTypeValues><PartySubType ID="4" PartyTypeID="1">Unknown</PartySubType></PartySubTypeValues>
 </ReferenceValueSets>`;
 
 function ofacParty(fixedRef: string, name: string): string {
-  return `<DistinctParty FixedRef="${fixedRef}"><Profile ID="${fixedRef}" PartySubTypeID="4"><Identity>
+  return `<DistinctParty FixedRef="${fixedRef}"><Profile ID="${fixedRef}" PartySubTypeID="4"><Identity ID="${fixedRef}-identity">
     <Alias AliasTypeID="1403" Primary="true" LowQuality="false"><DocumentedName>
       <DocumentedNamePart><NamePartValue>${name}</NamePartValue></DocumentedNamePart>
     </DocumentedName></Alias>
-  </Identity></Profile></DistinctParty>`;
+  </Identity><Feature FeatureTypeID="25"><FeatureVersion><VersionLocation LocationID="${fixedRef}-location" /></FeatureVersion></Feature></Profile></DistinctParty>`;
+}
+
+function ofacLocation(fixedRef: string): string {
+  return `<Location ID="${fixedRef}-location">
+    <LocationCountry CountryID="11171" />
+    <LocationPart LocPartTypeID="1451"><LocationPartValue><Value>${fixedRef} Main Street</Value></LocationPartValue></LocationPart>
+    <LocationPart LocPartTypeID="1454"><LocationPartValue><Value>Artyom</Value></LocationPartValue></LocationPart>
+  </Location>`;
+}
+
+function ofacIdDocument(fixedRef: string, value: string): string {
+  return `<IDRegDocument ID="${fixedRef}-doc" IDRegDocTypeID="1626" IdentityID="${fixedRef}-identity">
+    <IDRegistrationNo>${value}</IDRegistrationNo>
+  </IDRegDocument>`;
 }
 
 function ofacEntry(profileId: string, program: string, year: string): string {
@@ -52,9 +69,10 @@ function ofacDocument(source: 'SDN' | 'CONS'): string {
   const ref = source === 'SDN' ? '900' : '901';
   return `<?xml version="1.0" encoding="utf-8"?><Sanctions>
   ${OFAC_REFS}
-  <Locations><Location ID="1"><LocationCountry><Country>US</Country></LocationCountry></Location></Locations>
+  <Locations>${ofacLocation(ref)}</Locations>
   <DistinctParties>${ofacParty(ref, `OFAC ${source} Person`)}</DistinctParties>
   <ProfileRelationships/>
+  <IDRegDocuments>${ofacIdDocument(ref, `IMO ${source}-123`)}</IDRegDocuments>
   <SanctionsEntries>${ofacEntry(ref, `PROG-${source}`, '1999')}</SanctionsEntries>
 </Sanctions>`;
 }
@@ -153,7 +171,7 @@ async function drainSync(
 
 /** The no-op deferred-field sink; the sanctions sync requires one. */
 function noopSync(): ReturnType<typeof createSanctionsSync> {
-  return createSanctionsSync({ applyDeferredFields: async () => {} });
+  return createSanctionsSync({ applyDeferredFields: async () => { } });
 }
 
 afterEach(() => {
@@ -235,7 +253,7 @@ describe('createSanctionsSync — harvest loop contract', () => {
     const reports: { accepted: number; rejected: object; source: SourceCode }[] = [];
     await drainSync(
       createSanctionsSync({
-        applyDeferredFields: async () => {},
+        applyDeferredFields: async () => { },
         onSourceReport: (report) => reports.push(report),
       }),
     );
@@ -316,7 +334,17 @@ describe('sanctions harvest — bounded memory', () => {
     expect(streamed.map((d) => d.sourceEntryId)).toEqual(['900']);
     expect(streamed[0]?.program).toBeUndefined();
     expect(ingester!.deferredFields?.()).toEqual(
-      new Map([['900', { program: 'PROG-SDN', designationDate: '1999-03-04' }]]),
+      new Map([
+        [
+          '900',
+          {
+            program: 'PROG-SDN',
+            designationDate: '1999-03-04',
+            addresses: [{ full: '900 Main Street, Artyom, Russia', country: 'Russia' }],
+            identifiers: [{ type: 'Vessel Registration Identification', value: 'IMO SDN-123' }],
+          },
+        ],
+      ]),
     );
   });
 });
@@ -362,6 +390,26 @@ describe('OFAC deferred programme join', () => {
       program: 'PROG-CONS',
       designation_date: '1999-03-04',
     });
+  });
+
+  it('merges ID registration documents and addresses into payloads during mirror init', async () => {
+    stubSourceFetch(SOURCE_BODIES);
+    harness = await freshService();
+    await harness.service.designations.runSync({
+      mode: 'init',
+      signal: new AbortController().signal,
+    });
+    const handle = await harness.service.designations.raw();
+    const row = handle
+      .prepare<{ payload: string }>('SELECT payload FROM designation WHERE id = ?')
+      .get('ofac_sdn:900');
+    const payload = JSON.parse(row?.payload ?? '{}') as NormalizedDesignation['payload'];
+    expect(payload.identifiers).toEqual([
+      { type: 'Vessel Registration Identification', value: 'IMO SDN-123' },
+    ]);
+    expect(payload.addresses).toEqual([
+      { full: '900 Main Street, Artyom, Russia', country: 'Russia' },
+    ]);
   });
 
   it('leaves a party with no programme entry null, and invents no row for an orphan entry', async () => {

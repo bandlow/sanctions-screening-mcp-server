@@ -8,21 +8,26 @@
  * @module index
  */
 
-import { createApp } from '@cyanheads/mcp-ts-core';
-import { config } from '@cyanheads/mcp-ts-core/config';
-import { logger, requestContextService, schedulerService } from '@cyanheads/mcp-ts-core/utils';
-import { getServerConfig } from './config/server-config.js';
-import { allPromptDefinitions } from './mcp-server/prompts/definitions/index.js';
-import { allResourceDefinitions } from './mcp-server/resources/definitions/index.js';
-import { allToolDefinitions } from './mcp-server/tools/definitions/index.js';
+import { createApp } from "@cyanheads/mcp-ts-core";
+import { config } from "@cyanheads/mcp-ts-core/config";
+import {
+  logger,
+  requestContextService,
+  schedulerService,
+} from "@cyanheads/mcp-ts-core/utils";
+import { getServerConfig } from "./config/server-config.js";
+import { allPromptDefinitions } from "./mcp-server/prompts/definitions/index.js";
+import { allResourceDefinitions } from "./mcp-server/resources/definitions/index.js";
+import { allToolDefinitions } from "./mcp-server/tools/definitions/index.js";
+import { startRestFacade } from "./rest/rest-facade.js";
 import {
   getScreeningService,
   initScreeningService,
-} from './services/screening/screening-service.js';
+} from "./services/screening/screening-service.js";
 
 await createApp({
-  name: 'sanctions-screening-mcp-server',
-  title: 'sanctions-screening-mcp-server',
+  name: "sanctions-screening-mcp-server",
+  title: "sanctions-screening-mcp-server",
   tools: allToolDefinitions,
   resources: allResourceDefinitions,
   prompts: allPromptDefinitions,
@@ -34,34 +39,39 @@ await createApp({
   // already served unauthenticated on the landing page and the server card.
   // Per-record read lifetimes live on the resource definitions themselves.
   cacheHints: {
-    'tools/list': { ttlMs: 3_600_000, cacheScope: 'public' },
-    'prompts/list': { ttlMs: 3_600_000, cacheScope: 'public' },
-    'resources/list': { ttlMs: 3_600_000, cacheScope: 'public' },
-    'resources/templates/list': { ttlMs: 3_600_000, cacheScope: 'public' },
-    'server/discover': { ttlMs: 3_600_000, cacheScope: 'public' },
+    "tools/list": { ttlMs: 3_600_000, cacheScope: "public" },
+    "prompts/list": { ttlMs: 3_600_000, cacheScope: "public" },
+    "resources/list": { ttlMs: 3_600_000, cacheScope: "public" },
+    "resources/templates/list": { ttlMs: 3_600_000, cacheScope: "public" },
+    "server/discover": { ttlMs: 3_600_000, cacheScope: "public" },
   },
   landing: {
     requireAuth: false,
     tagline:
-      'Screen names against OFAC, EU, UK, and UN sanctions lists and resolve legal entities against GLEIF — offline, fuzzy-matched. A screening aid, not a compliance determination.',
+      "Screen names against OFAC, EU, UK, and UN sanctions lists and resolve legal entities against GLEIF — offline, fuzzy-matched. A screening aid, not a compliance determination.",
     links: [
       {
-        label: 'OFAC Sanctions List Service',
-        href: 'https://sanctionslistservice.ofac.treas.gov/',
+        label: "OFAC Sanctions List Service",
+        href: "https://sanctionslistservice.ofac.treas.gov/",
         external: true,
       },
-      { label: 'UK Sanctions List', href: 'https://sanctionslist.fcdo.gov.uk/', external: true },
       {
-        label: 'UN SC Consolidated List',
-        href: 'https://main.un.org/securitycouncil/en/content/un-sc-consolidated-list',
+        label: "UK Sanctions List",
+        href: "https://sanctionslist.fcdo.gov.uk/",
         external: true,
       },
-      { label: 'GLEIF', href: 'https://www.gleif.org/', external: true },
+      {
+        label: "UN SC Consolidated List",
+        href: "https://main.un.org/securitycouncil/en/content/un-sc-consolidated-list",
+        external: true,
+      },
+      { label: "GLEIF", href: "https://www.gleif.org/", external: true },
     ],
   },
-  setup() {
+  async setup() {
     initScreeningService();
     scheduleRefresh();
+    await startRestFacade();
   },
 });
 
@@ -71,27 +81,29 @@ await createApp({
  * redundant and could collide with a manual run.
  */
 function scheduleRefresh(): void {
-  if (config.mcpTransportType !== 'http') return;
+  if (config.mcpTransportType !== "http") return;
   const { refreshCron } = getServerConfig();
   void schedulerService
     .schedule(
-      'sanctions-mirror-refresh',
+      "sanctions-mirror-refresh",
       refreshCron,
       async (ctx) => {
         const svc = getScreeningService();
-        logger.info('Starting scheduled sanctions mirror refresh', ctx);
-        await svc.designations.runSync({ mode: 'refresh' });
+        logger.info("Starting scheduled sanctions mirror refresh", ctx);
+        await svc.designations.runSync({ mode: "refresh" });
         await svc.rebuildNameIndex();
-        logger.info('Scheduled sanctions mirror refresh complete', ctx);
+        logger.info("Scheduled sanctions mirror refresh complete", ctx);
       },
-      'Refreshes the sanctions watchlists from their upstream sources.',
+      "Refreshes the sanctions watchlists from their upstream sources.",
     )
-    .then(() => schedulerService.start('sanctions-mirror-refresh'))
+    .then(() => schedulerService.start("sanctions-mirror-refresh"))
     .catch((err) => {
       logger.error(
-        'Failed to schedule sanctions mirror refresh',
+        "Failed to schedule sanctions mirror refresh",
         err as Error,
-        requestContextService.createRequestContext({ operation: 'scheduleRefresh' }),
+        requestContextService.createRequestContext({
+          operation: "scheduleRefresh",
+        }),
       );
     });
 }

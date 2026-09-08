@@ -53,10 +53,23 @@ const OFAC_ADVANCED_XML = `<?xml version="1.0" encoding="utf-8"?>
       <AliasType ID="1401">F.K.A.</AliasType>
       <AliasType ID="1403">Name</AliasType>
     </AliasTypeValues>
+    <IDRegDocTypeValues>
+      <IDRegDocType ID="1626">Vessel Registration Identification</IDRegDocType>
+    </IDRegDocTypeValues>
     <FeatureTypeValues>
       <FeatureType ID="8">Birthdate</FeatureType>
       <FeatureType ID="9">Place of Birth</FeatureType>
+      <FeatureType ID="25">Location</FeatureType>
     </FeatureTypeValues>
+    <LocPartTypeValues>
+      <LocPartType ID="1451">ADDRESS1</LocPartType>
+      <LocPartType ID="1454">CITY</LocPartType>
+      <LocPartType ID="1455">STATE/PROVINCE</LocPartType>
+      <LocPartType ID="1456">POSTAL CODE</LocPartType>
+    </LocPartTypeValues>
+    <CountryValues>
+      <Country ID="11171" ISO2="RU">Russia</Country>
+    </CountryValues>
     <PartySubTypeValues>
       <PartySubType ID="1" PartyTypeID="4">Vessel</PartySubType>
       <PartySubType ID="2" PartyTypeID="4">Aircraft</PartySubType>
@@ -100,9 +113,26 @@ const OFAC_ADVANCED_XML = `<?xml version="1.0" encoding="utf-8"?>
             </DocumentedName>
           </Alias>
         </Identity>
+        <Feature FeatureTypeID="25">
+          <FeatureVersion ID="282150"><VersionLocation LocationID="82150" /></FeatureVersion>
+        </Feature>
       </Profile>
     </DistinctParty>
   </DistinctParties>
+  <Locations>
+    <Location ID="82150">
+      <LocationCountry CountryID="11171" />
+      <LocationPart LocPartTypeID="1451"><LocationPartValue><Value>Office 5, Dom 113/5, Vokzalnaya Street</Value></LocationPartValue></LocationPart>
+      <LocationPart LocPartTypeID="1454"><LocationPartValue><Value>Artyom</Value></LocationPartValue></LocationPart>
+      <LocationPart LocPartTypeID="1455"><LocationPartValue><Value>Primorsky Krai</Value></LocationPartValue></LocationPart>
+      <LocationPart LocPartTypeID="1456"><LocationPartValue><Value>692760</Value></LocationPartValue></LocationPart>
+    </Location>
+  </Locations>
+  <IDRegDocuments>
+    <IDRegDocument ID="11892" IDRegDocTypeID="1626" IdentityID="9001" ValidityID="1">
+      <IDRegistrationNo>IMO 8909575</IDRegistrationNo>
+    </IDRegDocument>
+  </IDRegDocuments>
   <SanctionsEntries>
     <SanctionsEntry ID="2674" ProfileID="2674" ListID="1550">
       <EntryEvent ID="1" EntryEventTypeID="1">
@@ -147,6 +177,15 @@ describe('OFAC advanced parser', () => {
     expect(vessel?.entityType).toBe('vessel'); // PartySubTypeID 1 → "Vessel"
     expect(vessel?.primaryName).toBe('MAR AZUL');
     expect(vessel?.program).toBe('CUBA');
+    expect(vessel?.payload.identifiers).toEqual([
+      { type: 'Vessel Registration Identification', value: 'IMO 8909575' },
+    ]);
+    expect(vessel?.payload.addresses).toEqual([
+      {
+        full: 'Office 5, Dom 113/5, Vokzalnaya Street, Artyom, Primorsky Krai, 692760, Russia',
+        country: 'Russia',
+      },
+    ]);
   });
 
   it('drops attributes (and so finds nothing) under the framework default parser', () => {

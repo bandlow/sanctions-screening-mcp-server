@@ -245,6 +245,85 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 # Server listens at http://localhost:3010/mcp
 ```
 
+### REST facade for SAP/CAP
+
+When running in HTTP mode, the server also exposes a REST facade on
+`MCP_HTTP_PORT + 1` at host `MCP_HTTP_HOST` for classical backend integration.
+
+With the example above (`MCP_HTTP_PORT=3010`), REST is available at
+`http://localhost:3011/api/v1`.
+
+API contract:
+
+- OpenAPI 3.1 spec: `docs/rest-facade-openapi.yaml`
+- Default request timeout contract: `30000ms`
+- Recommended idempotency header for POST routes: `Idempotency-Key`
+
+Endpoint rollout status:
+
+- `POST /api/v1/screening/business-partner` - implemented
+- `GET /api/v1/sources` - implemented
+- `GET /api/v1/screening/business-partner/{bpId}/history` - implemented
+- `POST /api/v1/screening/batch` - implemented (in-process execution)
+- `GET /api/v1/exceptions/{bpId}` - implemented (in-memory store)
+- `POST /api/v1/exceptions/{bpId}` - implemented (in-memory store)
+- `GET /api/v1/compliance/cases` - implemented (case worklist, in-memory store)
+- `GET /api/v1/compliance/cases/{caseId}` - implemented (case detail, hits, decisions)
+- `POST /api/v1/compliance/cases/{caseId}/decision` - implemented (manual decision + optional four-eyes approval)
+
+Compliance case worklist UI (MVP):
+
+- `GET /ui/compliance-cases` renders a lightweight Fiori-style worklist over the REST endpoints above.
+- Cases are auto-created when a screening request with `bpId` returns one or more hits.
+
+Example:
+
+```powershell
+curl.exe -X POST http://localhost:3011/api/v1/screening/business-partner `
+  -H "Content-Type: application/json" `
+  --data-raw '{"bpId":"1000001234","name":"ACME Trading LLC","role":"vendor","country":"DE","matchMode":"strict"}'
+```
+
+To call the endpoint manually, send the MCP `initialize` request first, followed
+by `tools/list` or `tools/call`. The following examples use PowerShell on
+Windows; use `curl.exe` rather than PowerShell's `curl` alias:
+
+```powershell
+curl.exe -i http://localhost:3010/mcp `
+  -H "Content-Type: application/json" `
+  -H "Accept: application/json, text/event-stream" `
+  --data-raw '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"manual-client","version":"1.0"}}}'
+```
+
+Copy the `mcp-session-id` response header from this request. Use that value in
+the `Mcp-Session-Id` header of all subsequent requests in the same session:
+
+```powershell
+curl.exe http://localhost:3010/mcp `
+  -H "Content-Type: application/json" `
+  -H "Accept: application/json, text/event-stream" `
+  -H "Mcp-Session-Id: <the-session-id-from-initialize>" `
+  --data-raw '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+
+curl.exe http://localhost:3010/mcp `
+  -H "Content-Type: application/json" `
+  -H "Accept: application/json, text/event-stream" `
+  -H "Mcp-Session-Id: <the-session-id-from-initialize>" `
+  --data-raw '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"sanctions_screen_name","arguments":{"name":"ACME Corporation"}}}'
+```
+
+The hosted instance is available at
+`https://sanctions-screening.caseyjhand.com/mcp` and does not require local
+mirror initialization. For a self-hosted instance, populate the local mirror
+before screening:
+
+```sh
+bun run mirror:init
+```
+
+This full load includes GLEIF and can take a long time. To load only the
+sanctions lists, set `SANCTIONS_INIT_SKIP_GLEIF=1` before running the command.
+
 ### Prerequisites
 
 - [Bun v1.3](https://bun.sh/) or higher (or Node.js v24+).
@@ -258,26 +337,26 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 git clone https://github.com/cyanheads/sanctions-screening-mcp-server.git
 ```
 
-2. **Navigate into the directory:**
+1. **Navigate into the directory:**
 
 ```sh
 cd sanctions-screening-mcp-server
 ```
 
-3. **Install dependencies:**
+1. **Install dependencies:**
 
 ```sh
 bun install
 ```
 
-4. **Configure environment:**
+1. **Configure environment:**
 
 ```sh
 cp .env.example .env
 # edit .env if you need to override defaults (all optional)
 ```
 
-5. **Populate the mirror:**
+1. **Populate the mirror:**
 
 ```sh
 bun run mirror:init
