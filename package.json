@@ -50,7 +50,9 @@
     "mirror:init": "bun run scripts/mirror-init.ts",
     "mirror:refresh": "bun run scripts/mirror-refresh.ts",
     "mirror:verify": "bun run scripts/mirror-verify.ts",
-    "mirror:seed": "bun run scripts/mirror-seed.ts"
+    "mirror:seed": "bun run scripts/mirror-seed.ts",
+    "login": "cf l --sso",
+    "login:skfd": "cf login -a https://api.cf.eu20.hana.ondemand.com --sso -o skfm-shipm-dev -s sanction-screening-mcp"
   },
   "keywords": [
     "sanctions",
