@@ -37,6 +37,17 @@ const ServerConfigSchema = z.object({
     .describe(
       'Cron for the scheduled refresh of the sanctions lists + name index (HTTP transport only). GLEIF deltas are not applied on the cron — refresh them manually with mirror:refresh.',
     ),
+  restHttpPort: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(65535)
+    .default(0)
+    .describe('Public REST port; 0 uses MCP_HTTP_PORT + 1.'),
+  restMcpProxyHost: z
+    .string()
+    .default('127.0.0.1')
+    .describe('Internal host used by the REST facade to proxy /mcp requests.'),
   fuzzyMinScore: z.coerce
     .number()
     .min(0)
@@ -98,6 +109,8 @@ export function getServerConfig(): ServerConfig {
   _config ??= parseEnvConfig(ServerConfigSchema, {
     mirrorPath: 'SANCTIONS_MIRROR_PATH',
     refreshCron: 'SANCTIONS_REFRESH_CRON',
+    restHttpPort: 'REST_HTTP_PORT',
+    restMcpProxyHost: 'REST_MCP_PROXY_HOST',
     fuzzyMinScore: 'SANCTIONS_FUZZY_MIN_SCORE',
     fuzzyMaxResults: 'SANCTIONS_FUZZY_MAX_RESULTS',
     ofacSdnUrl: 'OFAC_SDN_URL',

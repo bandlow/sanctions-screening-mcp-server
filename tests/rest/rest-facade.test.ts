@@ -5,6 +5,7 @@
  */
 
 import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -57,6 +58,7 @@ const REST_VESSEL_FIXTURE: NormalizedDesignation = {
 };
 
 let stopRestFacade: (() => Promise<void>) | undefined;
+let mcpProxyTarget: Server | undefined;
 let tempDir = '';
 let closeScreeningService: (() => Promise<void>) | undefined;
 let resetScreeningServiceFn: (() => void) | undefined;
@@ -66,6 +68,18 @@ beforeAll(async () => {
   process.env.MCP_TRANSPORT_TYPE = 'http';
   process.env.MCP_HTTP_HOST = '127.0.0.1';
   process.env.MCP_HTTP_PORT = String(httpPort);
+  mcpProxyTarget = createServer((req, res) => {
+    if (req.url === '/mcp') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ proxied: true }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise<void>((resolve) =>
+    mcpProxyTarget?.listen(httpPort, '127.0.0.1', resolve),
+  );
   tempDir = mkdtempSync(join(tmpdir(), 'sanctions-rest-test-'));
   process.env.SANCTIONS_MIRROR_PATH = join(tempDir, 'test.db');
 
@@ -100,6 +114,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await stopRestFacade?.();
+  await new Promise<void>((resolve, reject) => {
+    mcpProxyTarget?.close((error) => (error ? reject(error) : resolve()));
+  });
   await closeScreeningService?.();
   resetScreeningServiceFn?.();
   try {
@@ -116,6 +133,8 @@ afterAll(async () => {
   delete process.env.MCP_TRANSPORT_TYPE;
   delete process.env.MCP_HTTP_HOST;
   delete process.env.MCP_HTTP_PORT;
+  delete process.env.REST_HTTP_PORT;
+  delete process.env.REST_MCP_PROXY_HOST;
   delete process.env.SANCTIONS_MIRROR_PATH;
   resetServerConfigFn?.();
 
@@ -190,6 +209,13 @@ describe('REST facade compliance-case endpoints', () => {
     const bundleResponse = await fetch(`${restBaseUrl}/ui/swagger-ui-bundle.js`);
     expect(bundleResponse.status).toBe(200);
     expect(bundleResponse.headers.get('content-type')).toContain('application/javascript');
+  });
+
+  it('proxies MCP requests through the public REST listener', async () => {
+    const response = await fetch(`${restBaseUrl}/mcp`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ proxied: true });
   });
 
   it('serves the compliance worklist UI route', async () => {

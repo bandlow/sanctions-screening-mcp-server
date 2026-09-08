@@ -263,6 +263,21 @@ API contract:
 - Default request timeout contract: `30000ms`
 - Recommended idempotency header for POST routes: `Idempotency-Key`
 
+For a single public port, set `MCP_HTTP_PORT` to the internal MCP port and
+`REST_HTTP_PORT` to the public port. The REST listener then proxies `/mcp` and
+serves the REST and Swagger routes from the same public endpoint. For example:
+
+```text
+MCP_HTTP_PORT=3010
+REST_HTTP_PORT=3011
+http://localhost:3011/mcp
+http://localhost:3011/api/v1
+http://localhost:3011/ui/swagger
+```
+
+In Cloud Foundry, use the CF-provided public port for `REST_HTTP_PORT` and a
+different internal port for `MCP_HTTP_PORT`, for example `8080` and `8081`.
+
 Endpoint rollout status:
 
 - `POST /api/v1/screening/business-partner` - implemented

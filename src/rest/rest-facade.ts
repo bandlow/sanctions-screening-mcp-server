@@ -3,20 +3,28 @@
  * stable HTTP endpoints over the existing screening engine (no duplicate
  * business logic): name screening for business partners and source freshness.
  *
- * The facade starts only on HTTP transport and listens on `MCP_HTTP_PORT + 1`
- * to avoid colliding with the MCP endpoint.
+ * The facade starts only on HTTP transport. By default it listens on
+ * `MCP_HTTP_PORT + 1`; `REST_HTTP_PORT` can expose it as the public listener
+ * and proxy `/mcp` to the internal MCP listener for single-port deployments.
  * @module rest/rest-facade
  */
 
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from 'node:http';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type ContextLogger, z } from '@cyanheads/mcp-ts-core';
 import { config } from '@cyanheads/mcp-ts-core/config';
 import { logger, requestContextService } from '@cyanheads/mcp-ts-core/utils';
+import { getServerConfig } from '@/config/server-config.js';
 import {
   GLEIF_LICENSE,
   GLEIF_SOURCE_LABEL,
@@ -295,7 +303,13 @@ export async function startRestFacade(): Promise<void> {
   if (config.mcpTransportType !== 'http') return;
   if (restServer) return;
 
-  const restPort = config.mcpHttpPort + 1;
+  const serverConfig = getServerConfig();
+  const restPort = serverConfig.restHttpPort || config.mcpHttpPort + 1;
+  if (restPort === config.mcpHttpPort) {
+    throw new Error(
+      `REST_HTTP_PORT (${restPort}) must differ from MCP_HTTP_PORT (${config.mcpHttpPort}); use REST_HTTP_PORT as the public proxy port and MCP_HTTP_PORT as the internal MCP port.`,
+    );
+  }
   if (restPort > 65535) {
     throw new Error(
       `Cannot start REST facade because MCP_HTTP_PORT is ${config.mcpHttpPort}, so MCP_HTTP_PORT + 1 exceeds 65535.`,
@@ -350,6 +364,11 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
 
   try {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+
+    if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
+      await proxyMcpRequest(req, res, url);
+      return;
+    }
 
     if (req.method === 'OPTIONS') {
       writeNoContent(res);
@@ -530,7 +549,7 @@ async function handleOpenApiYaml(res: ServerResponse): Promise<void> {
       const spec = await readFile(specPath, 'utf8');
       writeText(res, 200, spec, 'application/yaml; charset=utf-8');
       return;
-    } catch {}
+    } catch { }
   }
 
   writeJson(res, 500, {
@@ -539,6 +558,46 @@ async function handleOpenApiYaml(res: ServerResponse): Promise<void> {
       message: 'OpenAPI specification file is not available at docs/rest-facade-openapi.yaml.',
     },
   });
+}
+
+async function proxyMcpRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<void> {
+  const serverConfig = getServerConfig();
+  const upstream = httpRequest(
+    {
+      hostname: serverConfig.restMcpProxyHost,
+      port: config.mcpHttpPort,
+      method: req.method,
+      path: `${url.pathname}${url.search}`,
+      headers: {
+        ...req.headers,
+        host: `${serverConfig.restMcpProxyHost}:${config.mcpHttpPort}`,
+        'x-forwarded-host': req.headers.host ?? '',
+      },
+    },
+    (upstreamResponse) => {
+      res.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+      upstreamResponse.pipe(res);
+    },
+  );
+
+  upstream.on('error', () => {
+    if (!res.headersSent) {
+      writeJson(res, 502, {
+        error: {
+          code: 'mcp_upstream_unavailable',
+          message: 'The internal MCP listener is unavailable.',
+        },
+      });
+      return;
+    }
+    res.destroy();
+  });
+
+  req.pipe(upstream);
 }
 
 async function handleSwaggerAsset(
@@ -1177,16 +1236,16 @@ async function executeScreening(
   reqLog: ContextLogger,
 ): Promise<
   | {
-      body: ScreeningResponseBody;
-    }
+    body: ScreeningResponseBody;
+  }
   | {
-      status: 503;
-      error: {
-        code: 'mirror_not_ready';
-        message: string;
-        recovery: string;
-      };
-    }
+    status: 503;
+    error: {
+      code: 'mirror_not_ready';
+      message: string;
+      recovery: string;
+    };
+  }
 > {
   const svc = getScreeningService();
   const sanctions = await svc.sanctionsReadiness();
