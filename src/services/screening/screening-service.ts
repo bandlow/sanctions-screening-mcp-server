@@ -471,9 +471,9 @@ export class ScreeningService {
         const payload =
           value.identifiers?.length || value.addresses?.length
             ? mergePayloadDetails(JSON.parse(row.payload) as DesignationPayload, {
-                addresses: value.addresses ?? [],
-                identifiers: value.identifiers ?? [],
-              })
+              addresses: value.addresses ?? [],
+              identifiers: value.identifiers ?? [],
+            })
             : row.payload;
         update.run(value.program ?? null, value.designationDate ?? null, payload, source, entryId);
       }
@@ -512,7 +512,7 @@ export class ScreeningService {
     handle.transaction(() => {
       handle.exec(`DELETE FROM ${NAME_TABLE}`);
       let cursor = '';
-      for (;;) {
+      for (; ;) {
         const rows = slice.all(cursor);
         if (rows.length === 0) return;
         for (const row of rows) {

@@ -763,8 +763,8 @@ async function handleIdentifierScreen(req: IncomingMessage, res: ServerResponse)
     })),
     ...(result.totalAvailable === 0
       ? {
-          notice: `No published identifier matched "${input.identifier}" across the selected lists. This is NOT a clearance.`,
-        }
+        notice: `No published identifier matched "${input.identifier}" across the selected lists. This is NOT a clearance.`,
+      }
       : {}),
     caveat: SCREENING_CAVEAT,
   };
