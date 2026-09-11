@@ -1,0 +1,7 @@
+# Use this workspace to collaborate
+workspace:
+  id: 186510ae-e81d-4412-865f-af8f84dfdb88
+
+localResources:
+  specs:
+    - ../rest-facade-openapi.yaml

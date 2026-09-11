@@ -1054,22 +1054,25 @@ export class ScreeningService {
       )
       .all();
 
-    const hits: IdentifierSearchHit[] = [];
+    const exactHits: IdentifierSearchHit[] = [];
+    const containsHits: IdentifierSearchHit[] = [];
+    const compactQuery = normalizedQuery.replace(/\s+/g, '');
     for (const row of rows) {
       const payload = JSON.parse(row.payload) as DesignationPayload;
       for (const identifier of payload.identifiers) {
         const value = fold(identifier.value);
         const identifierType = fold(identifier.type);
+        const compactValue = value.replace(/\s+/g, '');
         if (
           normalizedType &&
           !identifierType.includes(normalizedType) &&
           !value.includes(normalizedType)
         )
           continue;
-        if (value !== normalizedQuery && !value.includes(normalizedQuery)) continue;
         const exactIdentifierToken =
-          value === normalizedQuery || tokenize(value).includes(normalizedQuery);
-        hits.push({
+          compactValue === compactQuery || tokenize(value).includes(normalizedQuery);
+        if (!exactIdentifierToken && !value.includes(normalizedQuery)) continue;
+        const hit: IdentifierSearchHit = {
           designationId: row.id,
           source: row.source as SourceCode,
           sourceEntryId: row.source_entry_id,
@@ -1079,9 +1082,12 @@ export class ScreeningService {
           matchType: exactIdentifierToken ? 'exact' : 'contains',
           ...(row.program ? { program: row.program } : {}),
           ...(row.designation_date ? { designationDate: row.designation_date } : {}),
-        });
+        };
+        (exactIdentifierToken ? exactHits : containsHits).push(hit);
       }
     }
+
+    const hits = exactHits.length > 0 ? exactHits : containsHits;
 
     hits.sort(
       (a, b) =>

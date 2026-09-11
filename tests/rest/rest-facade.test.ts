@@ -163,32 +163,98 @@ describe('REST facade compliance-case endpoints', () => {
   });
 
   it('screens an IMO identifier and returns the matching vessel candidate', async () => {
-    const response = await fetch(`${restBaseUrl}/api/v1/screening/identifier`, {
+    for (const identifier of ['IMO9218478', 'IMO 9218478']) {
+      const response = await fetch(`${restBaseUrl}/api/v1/screening/identifier`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, identifierType: 'IMO', entityType: 'vessel' }),
+      });
+      const payload = (await response.json()) as {
+        hits: Array<{
+          primaryName: string;
+          entityType: string;
+          matchType: string;
+          identifier: { value: string };
+        }>;
+        caveat: string;
+      };
+
+      expect(response.status).toBe(200);
+      expect(payload.hits).toHaveLength(1);
+      expect(payload.hits[0]?.primaryName).toBe('MV REST FACADE TEST');
+      expect(payload.hits[0]?.entityType).toBe('vessel');
+      expect(payload.hits[0]?.matchType).toBe('exact');
+      expect(payload.hits[0]?.identifier.value).toBe('IMO 9218478');
+      expect(payload.caveat).toContain('not a compliance determination');
+    }
+  });
+
+  it('includes aliases and identifiers on name-screening hits', async () => {
+    const response = await fetch(`${restBaseUrl}/api/v1/screening/business-partner`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'MV REST FACADE TEST', entityType: 'vessel' }),
+    });
+    const payload = (await response.json()) as {
+      hits: Array<{
+        aliases: Array<{ name: string; nameType: string }>;
+        identifiers: Array<{ type: string; value: string }>;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.hits[0]?.aliases).toEqual([{ name: 'REST TEST SHIP', nameType: 'aka' }]);
+    expect(payload.hits[0]?.identifiers).toEqual([
+      { type: 'Vessel Registration Identification', value: 'IMO 9218478' },
+    ]);
+  });
+
+  it('combines vessel name and IMO evidence on business-partner screening', async () => {
+    const response = await fetch(`${restBaseUrl}/api/v1/screening/business-partner`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        identifier: '9218478',
-        identifierType: 'IMO',
+        name: 'MV REST FACADE TEST',
         entityType: 'vessel',
+        identifiers: [{ type: 'IMO', value: 'IMO9218478' }],
       }),
     });
     const payload = (await response.json()) as {
       hits: Array<{
-        primaryName: string;
-        entityType: string;
-        matchType: string;
-        identifier: { value: string };
+        identifierMatchType?: string;
+        matchEvidence?: string[];
+        identifiers: Array<{ value: string }>;
       }>;
-      caveat: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.hits).toHaveLength(1);
+    expect(payload.hits[0]?.identifierMatchType).toBe('exact');
+    expect(payload.hits[0]?.matchEvidence).toEqual([
+      'name_exact',
+      'identifier_exact',
+      'identifier_type_Vessel Registration Identification',
+    ]);
+    expect(payload.hits[0]?.identifiers[0]?.value).toBe('IMO 9218478');
+  });
+
+  it('screens a vessel by identifier only when name and identifier type are omitted', async () => {
+    const response = await fetch(`${restBaseUrl}/api/v1/screening/business-partner`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entityType: 'vessel',
+        identifiers: [{ value: 'IMO9218478' }],
+      }),
+    });
+    const payload = (await response.json()) as {
+      hits: Array<{ primaryName: string; identifierMatchType: string }>;
     };
 
     expect(response.status).toBe(200);
     expect(payload.hits).toHaveLength(1);
     expect(payload.hits[0]?.primaryName).toBe('MV REST FACADE TEST');
-    expect(payload.hits[0]?.entityType).toBe('vessel');
-    expect(payload.hits[0]?.matchType).toBe('exact');
-    expect(payload.hits[0]?.identifier.value).toBe('IMO 9218478');
-    expect(payload.caveat).toContain('not a compliance determination');
+    expect(payload.hits[0]?.identifierMatchType).toBe('exact');
   });
 
   it('serves OpenAPI YAML and Swagger UI endpoints', async () => {

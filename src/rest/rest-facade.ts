@@ -47,6 +47,17 @@ const SOURCE_ENUM = z.enum([
   'us_bis_unverified',
 ]);
 
+const PartnerIdentifierSchema = z
+  .object({
+    type: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Optional identifier category, such as IMO or Registration.'),
+    value: z.string().min(1).describe('Identifier value as supplied by the business partner source.'),
+  })
+  .strict();
+
 const BusinessPartnerScreenRequestSchema = z
   .object({
     bpId: z
@@ -54,7 +65,12 @@ const BusinessPartnerScreenRequestSchema = z
       .min(1)
       .optional()
       .describe('Optional external business partner identifier from SAP.'),
-    name: z.string().min(1).describe('Business partner name to screen.'),
+    name: z.string().min(1).optional().describe('Optional business partner name to screen.'),
+    identifiers: z
+      .array(PartnerIdentifierSchema)
+      .min(1)
+      .optional()
+      .describe('Optional structured identifiers screened in addition to the name.'),
     country: z
       .string()
       .length(2)
@@ -85,7 +101,11 @@ const BusinessPartnerScreenRequestSchema = z
     limit: z.number().int().min(1).max(100).default(25).describe('Maximum hits to return.'),
     offset: z.number().int().min(0).default(0).describe('Zero-based pagination offset.'),
   })
-  .strict();
+  .strict()
+  .refine((value) => Boolean(value.name) || Boolean(value.identifiers?.length), {
+    message: 'At least one of name or identifiers is required.',
+    path: ['name'],
+  });
 
 const IdentifierScreenRequestSchema = z
   .object({
@@ -215,6 +235,7 @@ const CaseDecisionRequestSchema = z
   .strict();
 
 type BusinessPartnerScreenRequest = z.infer<typeof BusinessPartnerScreenRequestSchema>;
+type NamedBusinessPartnerScreenRequest = BusinessPartnerScreenRequest & { name: string };
 
 type ScreeningResponseBody = {
   businessPartner: {
@@ -686,7 +707,36 @@ async function handleBusinessPartnerScreen(
   }
 
   const input = parsed.data;
-  const response = await executeScreening(input, reqLog);
+  const response = input.name
+    ? await executeScreening(input as typeof input & { name: string }, reqLog)
+    : {
+      body: {
+        businessPartner: {
+          ...(input.bpId ? { bpId: input.bpId } : {}),
+          name: '',
+          ...(input.country ? { country: input.country } : {}),
+          ...(input.role ? { role: input.role } : {}),
+        },
+        screening: {
+          normalizedQuery: '',
+          requestedMatchMode: input.matchMode,
+          matchModeUsed: 'strict' as const,
+          entityType: input.entityType,
+          ...(input.minScore !== undefined ? { minScore: input.minScore } : {}),
+          sources: input.sources && input.sources.length > 0 ? input.sources : [...SOURCE_CODES],
+        },
+        pagination: {
+          limit: input.limit,
+          offset: input.offset,
+          returned: 0,
+          totalAvailable: 0,
+          totalAvailableBasis: 'exact',
+          hasMore: false,
+        },
+        hits: [],
+        caveat: SCREENING_CAVEAT,
+      },
+    };
   if ('error' in response) {
     writeJson(res, response.status, {
       error: response.error,
@@ -694,7 +744,84 @@ async function handleBusinessPartnerScreen(
     return;
   }
 
-  writeJson(res, 200, response.body);
+  if (!input.identifiers?.length) {
+    writeJson(res, 200, response.body);
+    return;
+  }
+
+  const svc = getScreeningService();
+  const sources = input.sources && input.sources.length > 0 ? input.sources : [...SOURCE_CODES];
+  const identifierResults = await Promise.all(
+    input.identifiers.map((identifier) =>
+      svc.searchIdentifier({
+        query: identifier.value,
+        ...(identifier.type ? { identifierType: identifier.type } : {}),
+        entityType: input.entityType,
+        sources,
+        limit: input.limit,
+        offset: 0,
+      }),
+    ),
+  );
+  const identifierHits = await Promise.all(
+    identifierResults.flatMap((result) =>
+      result.hits.map(async (hit) => {
+        const designation = await svc.getDesignation(hit.source, hit.sourceEntryId);
+        return {
+          source: hit.source,
+          sourceLabel: SOURCE_LABELS[hit.source],
+          sourceEntryId: hit.sourceEntryId,
+          entityType: hit.entityType,
+          primaryName: hit.primaryName,
+          matchedName: hit.primaryName,
+          matchedNameType: 'primary',
+          matchType: 'exact' as const,
+          identifier: hit.identifier,
+          identifierMatchType: hit.matchType,
+          matchEvidence: [`identifier_${hit.matchType}`, `identifier_type_${hit.identifier.type}`],
+          aliases: designation?.payload.aliases ?? [],
+          identifiers: designation?.payload.identifiers ?? [],
+          ...(hit.program ? { program: hit.program } : {}),
+          ...(hit.designationDate ? { designationDate: hit.designationDate } : {}),
+        };
+      }),
+    ),
+  );
+  const mergedHits = new Map<string, Record<string, unknown>>();
+  for (const hit of response.body.hits) {
+    const key = `${String(hit.source)}|${String(hit.sourceEntryId)}`;
+    mergedHits.set(key, {
+      ...hit,
+      matchEvidence: [`name_${String(hit.matchType)}`],
+    });
+  }
+  for (const hit of identifierHits) {
+    const key = `${hit.source}|${hit.sourceEntryId}`;
+    const existing = mergedHits.get(key);
+    if (existing) {
+      const evidence = Array.isArray(existing.matchEvidence) ? existing.matchEvidence : [];
+      mergedHits.set(key, {
+        ...existing,
+        identifier: hit.identifier,
+        identifierMatchType: hit.identifierMatchType,
+        matchEvidence: [...new Set([...evidence, ...hit.matchEvidence])],
+      });
+    } else {
+      mergedHits.set(key, hit);
+    }
+  }
+
+  writeJson(res, 200, {
+    ...response.body,
+    hits: [...mergedHits.values()].slice(0, input.limit),
+    pagination: {
+      ...response.body.pagination,
+      returned: Math.min(mergedHits.size, input.limit),
+      totalAvailable: mergedHits.size,
+      hasMore: mergedHits.size > input.limit,
+      ...(mergedHits.size > input.limit ? { nextOffset: input.limit } : {}),
+    },
+  });
 }
 
 async function handleIdentifierScreen(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -750,17 +877,24 @@ async function handleIdentifierScreen(req: IncomingMessage, res: ServerResponse)
       hasMore,
       ...(hasMore ? { nextOffset: input.offset + result.hits.length } : {}),
     },
-    hits: result.hits.map((hit) => ({
-      source: hit.source,
-      sourceLabel: SOURCE_LABELS[hit.source],
-      sourceEntryId: hit.sourceEntryId,
-      entityType: hit.entityType,
-      primaryName: hit.primaryName,
-      identifier: hit.identifier,
-      matchType: hit.matchType,
-      ...(hit.program ? { program: hit.program } : {}),
-      ...(hit.designationDate ? { designationDate: hit.designationDate } : {}),
-    })),
+    hits: await Promise.all(
+      result.hits.map(async (hit) => {
+        const designation = await svc.getDesignation(hit.source, hit.sourceEntryId);
+        return {
+          source: hit.source,
+          sourceLabel: SOURCE_LABELS[hit.source],
+          sourceEntryId: hit.sourceEntryId,
+          entityType: hit.entityType,
+          primaryName: hit.primaryName,
+          identifier: hit.identifier,
+          matchType: hit.matchType,
+          aliases: designation?.payload.aliases ?? [],
+          identifiers: designation?.payload.identifiers ?? [],
+          ...(hit.program ? { program: hit.program } : {}),
+          ...(hit.designationDate ? { designationDate: hit.designationDate } : {}),
+        };
+      }),
+    ),
     ...(result.totalAvailable === 0
       ? {
         notice: `No published identifier matched "${input.identifier}" across the selected lists. This is NOT a clearance.`,
@@ -908,7 +1042,7 @@ async function handleSapEccBusinessPartnerChanged(
   }
 
   const body = parsed.data;
-  const screeningInput: BusinessPartnerScreenRequest = {
+  const screeningInput: NamedBusinessPartnerScreenRequest = {
     bpId: body.businessPartner.bpId,
     name: body.businessPartner.name,
     ...(body.businessPartner.country ? { country: body.businessPartner.country } : {}),
@@ -964,7 +1098,7 @@ async function handleSapS4BusinessPartnerChanged(
   }
 
   const body = parsed.data;
-  const screeningInput: BusinessPartnerScreenRequest = {
+  const screeningInput: NamedBusinessPartnerScreenRequest = {
     bpId: body.businessPartner.bpId,
     name: body.businessPartner.name,
     ...(body.businessPartner.country ? { country: body.businessPartner.country } : {}),
@@ -1029,7 +1163,7 @@ async function handleSapBatchBusinessPartners(
   const failedItems: Array<{ bpId: string; reason: string; code: string }> = [];
 
   for (const item of input.items) {
-    const screeningInput: BusinessPartnerScreenRequest = {
+    const screeningInput: NamedBusinessPartnerScreenRequest = {
       bpId: item.bpId,
       name: item.name,
       ...(item.country ? { country: item.country } : {}),
@@ -1298,7 +1432,7 @@ async function handleCreateException(
 }
 
 async function executeScreening(
-  input: BusinessPartnerScreenRequest,
+  input: NamedBusinessPartnerScreenRequest,
   reqLog: ContextLogger,
 ): Promise<
   | {
@@ -1375,20 +1509,27 @@ async function executeScreening(
         hasMore,
         ...(hasMore ? { nextOffset: input.offset + result.hits.length } : {}),
       },
-      hits: result.hits.map((hit) => ({
-        source: hit.source,
-        sourceLabel: SOURCE_LABELS[hit.source],
-        sourceEntryId: hit.sourceEntryId,
-        entityType: hit.entityType,
-        primaryName: hit.primaryName,
-        matchedName: hit.matchedName,
-        matchedNameType: hit.matchedNameType,
-        matchType: hit.matchType,
-        ...(hit.score !== undefined ? { score: hit.score } : {}),
-        ...(hit.queryTokenCoverage ? { queryTokenCoverage: hit.queryTokenCoverage } : {}),
-        ...(hit.program ? { program: hit.program } : {}),
-        ...(hit.designationDate ? { designationDate: hit.designationDate } : {}),
-      })),
+      hits: await Promise.all(
+        result.hits.map(async (hit) => {
+          const designation = await svc.getDesignation(hit.source, hit.sourceEntryId);
+          return {
+            source: hit.source,
+            sourceLabel: SOURCE_LABELS[hit.source],
+            sourceEntryId: hit.sourceEntryId,
+            entityType: hit.entityType,
+            primaryName: hit.primaryName,
+            matchedName: hit.matchedName,
+            matchedNameType: hit.matchedNameType,
+            matchType: hit.matchType,
+            aliases: designation?.payload.aliases ?? [],
+            identifiers: designation?.payload.identifiers ?? [],
+            ...(hit.score !== undefined ? { score: hit.score } : {}),
+            ...(hit.queryTokenCoverage ? { queryTokenCoverage: hit.queryTokenCoverage } : {}),
+            ...(hit.program ? { program: hit.program } : {}),
+            ...(hit.designationDate ? { designationDate: hit.designationDate } : {}),
+          };
+        }),
+      ),
       ...(notice ? { notice } : {}),
       caveat: SCREENING_CAVEAT,
     },
@@ -1396,7 +1537,7 @@ async function executeScreening(
 }
 
 function recordSuccessfulScreeningSideEffects(
-  input: BusinessPartnerScreenRequest,
+  input: NamedBusinessPartnerScreenRequest,
   responseBody: ScreeningResponseBody,
 ): void {
   if (!input.bpId) return;

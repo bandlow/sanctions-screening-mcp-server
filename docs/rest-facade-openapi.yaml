@@ -198,11 +198,21 @@ components:
     BusinessPartnerScreenRequest:
       type: object
       additionalProperties: false
-      required: [name]
+      required: []
+      anyOf:
+        - required: [name]
+        - required: [identifiers]
       properties:
         name:
           type: string
           minLength: 1
+          description: Optional when identifiers are supplied.
+        identifiers:
+          type: array
+          minItems: 1
+          description: Optional structured identifiers screened in addition to the name.
+          items:
+            $ref: "#/components/schemas/PartnerIdentifier"
         bpId:
           type: string
           minLength: 1
@@ -341,6 +351,14 @@ components:
             type: { type: string }
             value: { type: string }
             country: { type: string }
+        aliases:
+          type: array
+          items:
+            $ref: "#/components/schemas/Alias"
+        identifiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Identifier"
         matchType:
           type: string
           enum: [exact, contains]
@@ -431,6 +449,22 @@ components:
         primaryName: { type: string }
         matchedName: { type: string }
         matchedNameType: { type: string }
+        identifier:
+          $ref: "#/components/schemas/Identifier"
+        identifierMatchType:
+          type: string
+          enum: [exact, contains]
+        matchEvidence:
+          type: array
+          items: { type: string }
+        aliases:
+          type: array
+          items:
+            $ref: "#/components/schemas/Alias"
+        identifiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Identifier"
         matchType:
           type: string
           enum: [exact, strong, approximate]
@@ -447,6 +481,36 @@ components:
         designationDate:
           type: string
           format: date
+
+    Alias:
+      type: object
+      required: [name, nameType]
+      properties:
+        name: { type: string }
+        nameType:
+          type: string
+          enum: [primary, aka, fka, low-quality-aka]
+
+    Identifier:
+      type: object
+      required: [type, value]
+      properties:
+        type: { type: string }
+        value: { type: string }
+        country: { type: string }
+
+    PartnerIdentifier:
+      type: object
+      additionalProperties: false
+      required: [value]
+      properties:
+        type:
+          {
+            type: string,
+            minLength: 1,
+            description: Optional identifier category,
+          }
+        value: { type: string, minLength: 1 }
 
     VesselDetails:
       type: object
