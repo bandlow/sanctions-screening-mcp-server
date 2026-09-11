@@ -281,11 +281,14 @@ different internal port for `MCP_HTTP_PORT`, for example `8080` and `8081`.
 Endpoint rollout status:
 
 - `POST /api/v1/screening/business-partner` - implemented
+- `POST /api/v1/screening/identifier` - implemented (IMO, passport, tax, and registration identifiers)
 - `GET /api/v1/sources` - implemented
 - `GET /api/v1/designations/{source}/{entryId}` - implemented
 
 Audit, cases, exceptions, decisions, SAP triggers, and batch orchestration belong
 to the separate `sanctions-audit-server` CAP application and are not exposed here.
+Date-of-birth values are available in designation details but are not yet search
+filters on the REST facade.
 
 Example:
 

@@ -162,6 +162,35 @@ describe('REST facade compliance-case endpoints', () => {
     expect(payload.error.code).toBe('designation_not_found');
   });
 
+  it('screens an IMO identifier and returns the matching vessel candidate', async () => {
+    const response = await fetch(`${restBaseUrl}/api/v1/screening/identifier`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        identifier: '9218478',
+        identifierType: 'IMO',
+        entityType: 'vessel',
+      }),
+    });
+    const payload = (await response.json()) as {
+      hits: Array<{
+        primaryName: string;
+        entityType: string;
+        matchType: string;
+        identifier: { value: string };
+      }>;
+      caveat: string;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.hits).toHaveLength(1);
+    expect(payload.hits[0]?.primaryName).toBe('MV REST FACADE TEST');
+    expect(payload.hits[0]?.entityType).toBe('vessel');
+    expect(payload.hits[0]?.matchType).toBe('exact');
+    expect(payload.hits[0]?.identifier.value).toBe('IMO 9218478');
+    expect(payload.caveat).toContain('not a compliance determination');
+  });
+
   it('serves OpenAPI YAML and Swagger UI endpoints', async () => {
     const specResponse = await fetch(`${restBaseUrl}/api/v1/openapi.yaml`);
     const specBody = await specResponse.text();

@@ -10,10 +10,18 @@ Aktive REST-Endpunkte:
 - `GET /api/v1/sources`
 - `GET /api/v1/designations/{source}/{entryId}`
 - `POST /api/v1/screening/business-partner`
+- `POST /api/v1/screening/identifier`
 
 Audit, Cases, Exceptions, Freigaben, SAP-Trigger und Batch-Orchestrierung werden
 nicht mehr vom Screening-Server angeboten. Diese Verantwortung liegt bei der
 CAP-Anwendung und deren persistenter Audit-Schicht.
+
+Der Identifier-Endpunkt nutzt die normalisierten Quell-Identifiers und
+unterstuetzt unter anderem IMO-, Pass-, Steuer- und Registrierungsnummern.
+Ein Identifier-Token wie `9218478` wird gegen einen publizierten Wert wie
+`IMO 9218478` als exakter Identifier-Treffer erkannt. Geburtsdaten werden
+weiterhin nur in den Detaildaten ausgegeben und noch nicht als Suchfilter
+verwendet.
 
 Die folgenden historischen MVP-Routen wurden aus Runtime und Vertrag entfernt:
 

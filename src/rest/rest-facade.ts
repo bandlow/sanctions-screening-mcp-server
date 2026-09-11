@@ -87,6 +87,27 @@ const BusinessPartnerScreenRequestSchema = z
   })
   .strict();
 
+const IdentifierScreenRequestSchema = z
+  .object({
+    identifier: z.string().min(1).describe('Published identifier value, such as an IMO number.'),
+    identifierType: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Optional published identifier category filter, such as IMO or Passport.'),
+    entityType: z
+      .enum(['any', 'person', 'organization', 'vessel', 'aircraft'])
+      .default('any')
+      .describe('Restrict the search to one entity class.'),
+    sources: z
+      .array(SOURCE_ENUM)
+      .optional()
+      .describe('Optional source-list subset. Omit to search all loaded lists.'),
+    limit: z.number().int().min(1).max(100).default(25).describe('Maximum hits to return.'),
+    offset: z.number().int().min(0).default(0).describe('Zero-based pagination offset.'),
+  })
+  .strict();
+
 const BatchScreenRequestSchema = z
   .object({
     items: z
@@ -217,6 +238,23 @@ type ScreeningResponseBody = {
     returned: number;
     totalAvailable: number;
     totalAvailableBasis: string;
+    hasMore: boolean;
+    nextOffset?: number;
+  };
+  hits: Array<Record<string, unknown>>;
+  notice?: string;
+  caveat: string;
+};
+
+type IdentifierResponseBody = {
+  identifier: string;
+  identifierType?: string;
+  normalizedQuery: string;
+  pagination: {
+    limit: number;
+    offset: number;
+    returned: number;
+    totalAvailable: number;
     hasMore: boolean;
     nextOffset?: number;
   };
@@ -430,6 +468,11 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
 
     if (req.method === 'POST' && url.pathname === '/api/v1/screening/business-partner') {
       await handleBusinessPartnerScreen(req, res, reqLog);
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/v1/screening/identifier') {
+      await handleIdentifierScreen(req, res);
       return;
     }
 
@@ -652,6 +695,81 @@ async function handleBusinessPartnerScreen(
   }
 
   writeJson(res, 200, response.body);
+}
+
+async function handleIdentifierScreen(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const payload = await readJsonBodyForRoute(req, res);
+  if (payload === undefined) return;
+
+  const parsed = IdentifierScreenRequestSchema.safeParse(payload);
+  if (!parsed.success) {
+    writeJson(res, 400, {
+      error: {
+        code: 'validation_error',
+        message: 'Invalid request payload for identifier screening.',
+        details: parsed.error.flatten(),
+      },
+    });
+    return;
+  }
+
+  const input = parsed.data;
+  const svc = getScreeningService();
+  const sanctions = await svc.sanctionsReadiness();
+  if (!sanctions.ready) {
+    writeJson(res, 503, {
+      error: {
+        code: 'mirror_not_ready',
+        message: 'The local sanctions mirror is not yet populated.',
+        recovery:
+          'Run the mirror:init lifecycle script to load the sanctions lists, then retry; check /api/v1/sources for readiness.',
+      },
+    });
+    return;
+  }
+
+  const sources = input.sources && input.sources.length > 0 ? input.sources : [...SOURCE_CODES];
+  const result = await svc.searchIdentifier({
+    query: input.identifier,
+    ...(input.identifierType ? { identifierType: input.identifierType } : {}),
+    entityType: input.entityType,
+    sources,
+    limit: input.limit,
+    offset: input.offset,
+  });
+  const hasMore = input.offset + result.hits.length < result.totalAvailable;
+  const body: IdentifierResponseBody = {
+    identifier: input.identifier,
+    ...(input.identifierType ? { identifierType: input.identifierType } : {}),
+    normalizedQuery: result.normalizedQuery,
+    pagination: {
+      limit: input.limit,
+      offset: input.offset,
+      returned: result.hits.length,
+      totalAvailable: result.totalAvailable,
+      hasMore,
+      ...(hasMore ? { nextOffset: input.offset + result.hits.length } : {}),
+    },
+    hits: result.hits.map((hit) => ({
+      source: hit.source,
+      sourceLabel: SOURCE_LABELS[hit.source],
+      sourceEntryId: hit.sourceEntryId,
+      entityType: hit.entityType,
+      primaryName: hit.primaryName,
+      identifier: hit.identifier,
+      matchType: hit.matchType,
+      ...(hit.program ? { program: hit.program } : {}),
+      ...(hit.designationDate ? { designationDate: hit.designationDate } : {}),
+    })),
+    ...(result.totalAvailable === 0
+      ? {
+          notice: `No published identifier matched "${input.identifier}" across the selected lists. This is NOT a clearance.`,
+        }
+      : {}),
+    caveat: SCREENING_CAVEAT,
+  };
+
+  writeJson(res, 200, body);
 }
 
 function handleBusinessPartnerHistory(bpId: string, url: URL, res: ServerResponse): void {

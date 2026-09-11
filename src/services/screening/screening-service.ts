@@ -1060,8 +1060,15 @@ export class ScreeningService {
       for (const identifier of payload.identifiers) {
         const value = fold(identifier.value);
         const identifierType = fold(identifier.type);
-        if (normalizedType && !identifierType.includes(normalizedType)) continue;
+        if (
+          normalizedType &&
+          !identifierType.includes(normalizedType) &&
+          !value.includes(normalizedType)
+        )
+          continue;
         if (value !== normalizedQuery && !value.includes(normalizedQuery)) continue;
+        const exactIdentifierToken =
+          value === normalizedQuery || tokenize(value).includes(normalizedQuery);
         hits.push({
           designationId: row.id,
           source: row.source as SourceCode,
@@ -1069,7 +1076,7 @@ export class ScreeningService {
           entityType: row.entity_type as EntityType,
           primaryName: row.primary_name,
           identifier,
-          matchType: value === normalizedQuery ? 'exact' : 'contains',
+          matchType: exactIdentifierToken ? 'exact' : 'contains',
           ...(row.program ? { program: row.program } : {}),
           ...(row.designation_date ? { designationDate: row.designation_date } : {}),
         });
