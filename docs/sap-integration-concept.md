@@ -404,7 +404,13 @@ Wichtig: Der Zustand liegt aktuell noch in-memory im laufenden Prozess (kein per
 
 ### Umsetzungsstand Punkt 4 (MVP, 2026-09-07)
 
-Punkt 4 wurde im bestehenden Server als SAP-Adapter-Layer umgesetzt:
+Der frühere MVP-Adapter im Screening-Server wurde inzwischen aus der aktiven
+REST-Fassade entfernt. SAP-Eingangskanäle, Audit, Cases und Freigaben gehören
+jetzt ausschließlich in das separate CAP-Projekt `sanctions-audit-server`.
+Die Screening-Fassade dieses Projekts akzeptiert nur noch fachliche
+Screening-Anfragen.
+
+Historischer Stand des MVP:
 
 - Neue Integrationsendpunkte in der REST-Fassade:
   - `POST /api/v1/integration/sap/ecc/business-partner-changed`

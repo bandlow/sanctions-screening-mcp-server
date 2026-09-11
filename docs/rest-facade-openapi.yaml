@@ -19,9 +19,6 @@ tags:
   - name: Screening
   - name: Sources
   - name: Designations
-  - name: Exceptions
-  - name: SapIntegration
-  - name: ComplianceCases
 
 paths:
   /sources:
@@ -30,8 +27,6 @@ paths:
       summary: List source readiness and provenance
       operationId: listSources
       x-implementation-status: implemented
-      parameters:
-        - $ref: '#/components/parameters/XRequestId'
       responses:
         '200':
           description: Mirror readiness, freshness timestamps, and source details.
@@ -39,49 +34,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SourcesResponse'
-        '500':
-          description: Unexpected server error.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
 
   /designations/{source}/{entryId}:
     get:
       tags: [Designations]
-      summary: Fetch one full designation record by source and entry id
-      description: |
-        Returns one normalized designation detail record, including aliases,
-        identifiers, addresses, and vessel metadata when published (for example
-        vessel flag and vessel type).
+      summary: Fetch one designation record
       operationId: getDesignationDetails
       x-implementation-status: implemented
-      x-timeout-ms: 30000
       parameters:
-        - $ref: '#/components/parameters/XRequestId'
         - $ref: '#/components/parameters/SourceCodePath'
         - $ref: '#/components/parameters/EntryIdPath'
       responses:
         '200':
-          description: Designation details for the requested source and entry id.
+          description: Designation details.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/DesignationDetailsResponse'
         '404':
-          description: Designation id not found in the mirror.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '503':
-          description: Local sanctions mirror not initialized.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Unexpected server error.
+          description: Designation not found.
           content:
             application/json:
               schema:
@@ -91,13 +62,9 @@ paths:
     post:
       tags: [Screening]
       summary: Screen one business partner name
-      description: |
-        Screens a business partner name against the selected sanctions sources.
-        The response contains potential matches only. It is a screening aid,
-        not a compliance determination.
+      description: Screening aid only; results are potential matches, not a compliance determination.
       operationId: screenBusinessPartner
       x-implementation-status: implemented
-      x-timeout-ms: 30000
       parameters:
         - $ref: '#/components/parameters/XRequestId'
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -109,360 +76,19 @@ paths:
               $ref: '#/components/schemas/BusinessPartnerScreenRequest'
       responses:
         '200':
-          description: Screening response with candidates ordered by relevance.
+          description: Potential matches.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/BusinessPartnerScreenResponse'
         '400':
-          description: Invalid request payload or malformed JSON.
+          description: Invalid request payload.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
-          description: Local sanctions mirror not initialized.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Unexpected server error.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /screening/business-partner/{bpId}/history:
-    get:
-      tags: [Screening]
-      summary: Fetch screening history for one business partner
-      operationId: getBusinessPartnerHistory
-      x-implementation-status: implemented
-      x-timeout-ms: 30000
-      parameters:
-        - $ref: '#/components/parameters/XRequestId'
-        - $ref: '#/components/parameters/BpIdPath'
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 25
-        - name: offset
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
-      responses:
-        '200':
-          description: History entries for the requested business partner.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BusinessPartnerHistoryResponse'
-
-  /screening/batch:
-    post:
-      tags: [Screening]
-      summary: Submit a batch screening request
-      operationId: submitScreeningBatch
-      x-implementation-status: implemented
-      x-timeout-ms: 30000
-      parameters:
-        - $ref: '#/components/parameters/XRequestId'
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/BatchScreenRequest'
-      responses:
-        '202':
-          description: Batch accepted for async processing.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/BatchScreenAcceptedResponse'
-        '400':
-          description: Invalid payload.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Unexpected server error.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /integration/sap/ecc/business-partner-changed:
-    post:
-      tags: [SapIntegration]
-      summary: Receive an ECC business-partner change trigger and screen immediately
-      operationId: handleSapEccBusinessPartnerChanged
-      x-implementation-status: implemented
-      x-timeout-ms: 30000
-      parameters:
-        - $ref: '#/components/parameters/XRequestId'
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SapEccBusinessPartnerChangedRequest'
-      responses:
-        '200':
-          description: Trigger accepted and screened in-process.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SapRealtimeScreeningResponse'
-        '400':
-          description: Invalid ECC integration payload.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '503':
-          description: Local sanctions mirror not initialized.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /integration/sap/s4/business-partner-changed:
-    post:
-      tags: [SapIntegration]
-      summary: Receive an S/4HANA event payload and screen immediately
-      operationId: handleSapS4BusinessPartnerChanged
-      x-implementation-status: implemented
-      x-timeout-ms: 30000
-      parameters:
-        - $ref: '#/components/parameters/XRequestId'
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SapS4BusinessPartnerChangedRequest'
-      responses:
-        '200':
-          description: Event accepted and screened in-process.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SapRealtimeScreeningResponse'
-        '400':
-          description: Invalid S/4 integration payload.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '503':
-          description: Local sanctions mirror not initialized.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /integration/sap/batch-business-partners:
-    post:
-      tags: [SapIntegration]
-      summary: Receive a SAP-driven batch and process screenings in-process
-      operationId: handleSapBatchBusinessPartners
-      x-implementation-status: implemented
-      x-timeout-ms: 30000
-      parameters:
-        - $ref: '#/components/parameters/XRequestId'
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SapBatchBusinessPartnersRequest'
-      responses:
-        '202':
-          description: Batch accepted and processed in-process.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SapBatchAcceptedResponse'
-        '400':
-          description: Invalid SAP batch payload.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Unexpected server error.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /exceptions/{bpId}:
-    get:
-      tags: [Exceptions]
-      summary: List exceptions for one business partner
-      operationId: listBusinessPartnerExceptions
-      x-implementation-status: implemented
-      x-timeout-ms: 30000
-      parameters:
-        - $ref: '#/components/parameters/XRequestId'
-        - $ref: '#/components/parameters/BpIdPath'
-      responses:
-        '200':
-          description: Exceptions/whitelist entries for the partner.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ExceptionListResponse'
-    post:
-      tags: [Exceptions]
-      summary: Create an exception for one business partner
-      operationId: createBusinessPartnerException
-      x-implementation-status: implemented
-      x-timeout-ms: 30000
-      parameters:
-        - $ref: '#/components/parameters/XRequestId'
-        - $ref: '#/components/parameters/IdempotencyKey'
-        - $ref: '#/components/parameters/BpIdPath'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/CreateExceptionRequest'
-      responses:
-        '201':
-          description: Exception created.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/CreateExceptionResponse'
-        '400':
-          description: Invalid payload.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Unexpected server error.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /compliance/cases:
-    get:
-      tags: [ComplianceCases]
-      summary: List compliance cases created from screening hits
-      operationId: listComplianceCases
-      x-implementation-status: implemented
-      x-timeout-ms: 30000
-      parameters:
-        - $ref: '#/components/parameters/XRequestId'
-        - name: status
-          in: query
-          required: false
-          schema:
-            type: string
-            enum: [open, in_review, pending_approval, closed]
-        - name: limit
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 25
-        - name: offset
-          in: query
-          required: false
-          schema:
-            type: integer
-            minimum: 0
-            default: 0
-      responses:
-        '200':
-          description: Case worklist with paging metadata.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ComplianceCaseListResponse'
-        '400':
-          description: Invalid query parameters.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /compliance/cases/{caseId}:
-    get:
-      tags: [ComplianceCases]
-      summary: Fetch one compliance case with hits and decisions
-      operationId: getComplianceCase
-      x-implementation-status: implemented
-      x-timeout-ms: 30000
-      parameters:
-        - $ref: '#/components/parameters/XRequestId'
-        - $ref: '#/components/parameters/CaseIdPath'
-      responses:
-        '200':
-          description: Complete compliance case details.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ComplianceCaseResponse'
-        '404':
-          description: Case id not found.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /compliance/cases/{caseId}/decision:
-    post:
-      tags: [ComplianceCases]
-      summary: Record a manual case decision with optional four-eyes approval
-      operationId: decideComplianceCase
-      x-implementation-status: implemented
-      x-timeout-ms: 30000
-      parameters:
-        - $ref: '#/components/parameters/XRequestId'
-        - $ref: '#/components/parameters/IdempotencyKey'
-        - $ref: '#/components/parameters/CaseIdPath'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/ComplianceCaseDecisionRequest'
-      responses:
-        '200':
-          description: Decision recorded.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ComplianceCaseDecisionResponse'
-        '400':
-          description: Invalid payload or four-eyes rule violated.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '404':
-          description: Case id not found.
+          description: Screening mirror is not ready.
           content:
             application/json:
               schema:

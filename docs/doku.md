@@ -1,5 +1,26 @@
 # Doku: Umsetzung Punkt 1 und 2 (REST-Fassade)
 
+## Aktueller API-Zuschnitt (2026-09-11)
+
+Die REST-Fassade dieses Projekts ist ausschliesslich eine Screening-Schnittstelle
+fuer die separate CAP-Anwendung `sanctions-audit-server`.
+
+Aktive REST-Endpunkte:
+- `GET /api/v1/sources`
+- `GET /api/v1/designations/{source}/{entryId}`
+- `POST /api/v1/screening/business-partner`
+
+Audit, Cases, Exceptions, Freigaben, SAP-Trigger und Batch-Orchestrierung werden
+nicht mehr vom Screening-Server angeboten. Diese Verantwortung liegt bei der
+CAP-Anwendung und deren persistenter Audit-Schicht.
+
+Die folgenden historischen MVP-Routen wurden aus Runtime und Vertrag entfernt:
+- `/api/v1/screening/business-partner/{bpId}/history`
+- `/api/v1/screening/batch`
+- `/api/v1/exceptions/*`
+- `/api/v1/compliance/cases/*`
+- `/api/v1/integration/sap/*`
+
 Datum: 2026-09-04
 
 ## Ziel

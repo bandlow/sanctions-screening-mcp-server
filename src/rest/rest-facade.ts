@@ -292,6 +292,24 @@ const historyByBpId = new Map<string, StoredScreeningEvent[]>();
 const exceptionsByBpId = new Map<string, StoredException[]>();
 const complianceCasesById = new Map<string, StoredComplianceCase>();
 const complianceCaseIdsByBpId = new Map<string, string[]>();
+
+// Legacy audit/SAP handlers are intentionally unreachable; ownership moved to CAP.
+void handleBusinessPartnerHistory;
+void handleScreeningBatch;
+void handleSapEccBusinessPartnerChanged;
+void handleSapS4BusinessPartnerChanged;
+void handleSapBatchBusinessPartners;
+void handleListExceptions;
+void handleListComplianceCases;
+void handleGetComplianceCase;
+void handleDecideComplianceCase;
+void handleCreateException;
+void matchBpHistoryPath;
+void matchExceptionsPath;
+void matchComplianceCasePath;
+void matchComplianceCaseDecisionPath;
+void renderComplianceCasesUiHtml;
+
 const OPENAPI_SPEC_PATHS = [
   resolve(process.cwd(), 'docs', 'rest-facade-openapi.yaml'),
   join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'docs', 'rest-facade-openapi.yaml'),
@@ -407,74 +425,6 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<
         'application/javascript; charset=utf-8',
         res,
       );
-      return;
-    }
-
-    if (req.method === 'GET' && url.pathname === '/ui/compliance-cases') {
-      writeHtml(res, 200, renderComplianceCasesUiHtml());
-      return;
-    }
-
-    if (req.method === 'GET' && url.pathname === '/api/v1/compliance/cases') {
-      handleListComplianceCases(url, res);
-      return;
-    }
-
-    const complianceCaseMatch = matchComplianceCasePath(url.pathname);
-    if (req.method === 'GET' && complianceCaseMatch) {
-      handleGetComplianceCase(complianceCaseMatch.caseId, res);
-      return;
-    }
-
-    const complianceCaseDecisionMatch = matchComplianceCaseDecisionPath(url.pathname);
-    if (req.method === 'POST' && complianceCaseDecisionMatch) {
-      await handleDecideComplianceCase(complianceCaseDecisionMatch.caseId, req, res);
-      return;
-    }
-
-    const historyMatch = matchBpHistoryPath(url.pathname);
-    if (req.method === 'GET' && historyMatch) {
-      handleBusinessPartnerHistory(historyMatch.bpId, url, res);
-      return;
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/v1/screening/batch') {
-      await handleScreeningBatch(req, res, reqLog);
-      return;
-    }
-
-    if (
-      req.method === 'POST' &&
-      url.pathname === '/api/v1/integration/sap/ecc/business-partner-changed'
-    ) {
-      await handleSapEccBusinessPartnerChanged(req, res, reqLog);
-      return;
-    }
-
-    if (
-      req.method === 'POST' &&
-      url.pathname === '/api/v1/integration/sap/s4/business-partner-changed'
-    ) {
-      await handleSapS4BusinessPartnerChanged(req, res, reqLog);
-      return;
-    }
-
-    if (
-      req.method === 'POST' &&
-      url.pathname === '/api/v1/integration/sap/batch-business-partners'
-    ) {
-      await handleSapBatchBusinessPartners(req, res, reqLog);
-      return;
-    }
-
-    const exceptionMatch = matchExceptionsPath(url.pathname);
-    if (req.method === 'GET' && exceptionMatch) {
-      handleListExceptions(exceptionMatch.bpId, res);
-      return;
-    }
-
-    if (req.method === 'POST' && exceptionMatch) {
-      await handleCreateException(exceptionMatch.bpId, req, res);
       return;
     }
 
@@ -700,8 +650,6 @@ async function handleBusinessPartnerScreen(
     });
     return;
   }
-
-  recordSuccessfulScreeningSideEffects(input, response.body);
 
   writeJson(res, 200, response.body);
 }
