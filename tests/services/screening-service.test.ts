@@ -74,6 +74,53 @@ describe("screenName — strict matching", () => {
       expect(hit.score).toBeUndefined();
     }
   });
+
+  it("filters by full address fields in the request", async () => {
+    const res = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Ivan Testovich Volkov",
+        address: {
+          street: "Test Street",
+          houseNumber: "1",
+          postalCode: "12345",
+          country: "Testland",
+        },
+      },
+      ctx,
+    );
+    expect(res.hits.find((h) => h.sourceEntryId === "FX-1001")).toBeDefined();
+    expect(res.hits.find((h) => h.sourceEntryId === "FX-2002")).toBeUndefined();
+  });
+
+  it("returns no hit when address filters do not match", async () => {
+    const res = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Ivan Testovich Volkov",
+        address: {
+          street: "Test Street",
+          houseNumber: "1",
+          postalCode: "99999",
+          country: "Testland",
+        },
+      },
+      ctx,
+    );
+    expect(res.hits).toHaveLength(0);
+  });
+
+  it("accepts entityType unknown and filters known entity hits out", async () => {
+    const res = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Ivan Testovich Volkov",
+        entityType: "unknown",
+      },
+      ctx,
+    );
+    expect(res.hits).toHaveLength(0);
+  });
 });
 
 describe("screenName — fuzzy fallback", () => {

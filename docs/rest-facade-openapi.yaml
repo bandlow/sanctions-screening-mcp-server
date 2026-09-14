@@ -225,8 +225,24 @@ components:
           enum: [customer, vendor, other]
         entityType:
           type: string
-          enum: [any, person, organization, vessel, aircraft]
+          enum: [any, person, organization, vessel, aircraft, unknown]
           default: any
+        address:
+          type: object
+          additionalProperties: false
+          properties:
+            street:
+              type: string
+              minLength: 1
+            houseNumber:
+              type: string
+              minLength: 1
+            postalCode:
+              type: string
+              minLength: 1
+            country:
+              type: string
+              minLength: 1
         matchMode:
           type: string
           enum: [strict, fuzzy]

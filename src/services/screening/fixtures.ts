@@ -35,7 +35,10 @@ export const FIXTURE_DESIGNATIONS: NormalizedDesignation[] = [
         { type: "Passport", value: "X1234567", country: "Testland" },
       ],
       addresses: [
-        { full: "1 Test Street, Testograd, Testland", country: "Testland" },
+        {
+          full: "Test Street 1, 12345 Testograd, Testland",
+          country: "Testland",
+        },
       ],
       datesOfBirth: [{ date: "1970-01-01", place: "Testograd" }],
       nationalities: ["Testland"],
@@ -56,7 +59,12 @@ export const FIXTURE_DESIGNATIONS: NormalizedDesignation[] = [
         { name: "FTC LLC", nameType: "aka" },
       ],
       identifiers: [],
-      addresses: [{ full: "99 Commerce Way, Testopolis", country: "Testland" }],
+      addresses: [
+        {
+          full: "Commerce Way 99, 54321 Testopolis, Testland",
+          country: "Testland",
+        },
+      ],
       datesOfBirth: [],
       nationalities: [],
     },
