@@ -1254,15 +1254,14 @@ describe("screenName — prefix matching with multiple results", () => {
 
     // Exact matches should come before strong, strong before approximate
     const exactEnd = byType.exact.length;
-    const strongStart = exactEnd;
-    const strongEnd = strongStart + byType.strong.length;
 
     // Verify ordering: all exact results come before all strong results
     if (byType.exact.length > 0 && byType.strong.length > 0) {
-      const lastExact = res.hits[exactEnd - 1]?.sourceEntryId;
-      const firstStrong = res.hits[strongStart]?.sourceEntryId;
-      // The position of the first strong should be after all exacts
-      expect(strongStart).toBe(byType.exact.length);
+      const firstStrongIndex = res.hits.findIndex(
+        (h) => h.matchType === "strong",
+      );
+      // The first strong result should start exactly after all exact results.
+      expect(firstStrongIndex).toBe(exactEnd);
     }
   });
 
