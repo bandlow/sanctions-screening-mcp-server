@@ -29,6 +29,23 @@ export interface SeededService {
 }
 
 /**
+ * Best-effort temp-dir cleanup for Windows: SQLite files can stay locked for a
+ * short period after close, so use retry-capable rmSync and never fail teardown.
+ */
+function cleanupTempDir(dir: string): void {
+  try {
+    rmSync(dir, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 50,
+    });
+  } catch {
+    // Teardown cleanup should not fail tests when OS-level file locks linger.
+  }
+}
+
+/**
  * Build a ScreeningService against a fresh temp SQLite file and seed it with the
  * synthetic fixture (all sources marked ready). Resets the memoized server
  * config first so `SANCTIONS_MIRROR_PATH` takes effect.
@@ -49,7 +66,7 @@ export async function seededService(): Promise<SeededService> {
     service,
     cleanup: async () => {
       await service.close();
-      rmSync(dir, { recursive: true, force: true });
+      cleanupTempDir(dir);
       delete process.env.SANCTIONS_MIRROR_PATH;
       resetServerConfig();
     },
@@ -72,7 +89,7 @@ export async function freshService(): Promise<SeededService> {
     service,
     cleanup: async () => {
       await service.close();
-      rmSync(dir, { recursive: true, force: true });
+      cleanupTempDir(dir);
       delete process.env.SANCTIONS_MIRROR_PATH;
       resetServerConfig();
     },
@@ -101,7 +118,7 @@ export async function seededGlobalService(): Promise<SeededService> {
     service,
     cleanup: async () => {
       await service.close();
-      rmSync(dir, { recursive: true, force: true });
+      cleanupTempDir(dir);
       delete process.env.SANCTIONS_MIRROR_PATH;
       resetServerConfig();
       resetScreeningService();
@@ -127,7 +144,7 @@ export async function emptyGlobalService(): Promise<SeededService> {
     service,
     cleanup: async () => {
       await service.close();
-      rmSync(dir, { recursive: true, force: true });
+      cleanupTempDir(dir);
       delete process.env.SANCTIONS_MIRROR_PATH;
       resetServerConfig();
       resetScreeningService();

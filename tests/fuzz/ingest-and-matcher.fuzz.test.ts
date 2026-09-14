@@ -12,7 +12,13 @@ import {
   streamLeiLevel1FromBytes,
   streamLeiLevel1FromText,
 } from '@/services/screening/gleif-ingest.js';
-import { parseEu, parseOfac, parseUk, parseUn } from '@/services/screening/sanctions-ingest.js';
+import {
+  parseBisCsv,
+  parseEu,
+  parseOfac,
+  parseUk,
+  parseUn,
+} from '@/services/screening/sanctions-ingest.js';
 import {
   buildFtsMatch,
   doubleMetaphone,
@@ -127,6 +133,7 @@ describe('ingest parser fuzz invariants', () => {
       expect(parseEu(doc)).toHaveLength(0);
       expect(parseUk(doc)).toHaveLength(0);
       expect(parseUn(doc)).toHaveLength(0);
+      expect(parseBisCsv(String(value), 'us_bis_entity')).toHaveLength(0);
       expect(parseLeiLevel1(doc)).toHaveLength(0);
     }
   });

@@ -17,10 +17,23 @@ export const getDesignationTool = tool('sanctions_get_designation', {
   title: 'sanctions-screening-mcp-server: get designation',
   description:
     'Fetch the full record for one sanctions designation by source list + entry ID — the drill-in after sanctions_screen_name surfaces a candidate. Returns all published aliases, identifiers (passport/national-ID/tax), addresses, dates and places of birth, nationalities, sanctioning program, legal basis, and designation date. The record reflects exactly what the source published; missing fields mean the source omitted them. This is a screening aid — the designation record supports a compliance review, it is not itself a determination.',
-  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  annotations: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   input: z.object({
     source: z
-      .enum(['ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un'])
+      .enum([
+        'ofac_sdn',
+        'ofac_consolidated',
+        'eu',
+        'uk',
+        'un',
+        'us_bis_entity',
+        'us_bis_dpl',
+        'us_bis_unverified',
+      ])
       .describe('Which source list the entry belongs to.'),
     entryId: z
       .string()
@@ -29,7 +42,16 @@ export const getDesignationTool = tool('sanctions_get_designation', {
   }),
   output: z.object({
     source: z
-      .enum(['ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un'])
+      .enum([
+        'ofac_sdn',
+        'ofac_consolidated',
+        'eu',
+        'uk',
+        'un',
+        'us_bis_entity',
+        'us_bis_dpl',
+        'us_bis_unverified',
+      ])
       .describe('Source list the entry belongs to.'),
     sourceLabel: z.string().describe('Human-readable name of the source list.'),
     sourceEntryId: z.string().describe("The source list's own entry ID."),
@@ -84,6 +106,20 @@ export const getDesignationTool = tool('sanctions_get_designation', {
       )
       .describe('Published dates and places of birth (persons).'),
     nationalities: z.array(z.string()).describe('Published nationalities / citizenships.'),
+    vesselDetails: z
+      .object({
+        flag: z.string().optional().describe('Current vessel flag, when published.'),
+        formerFlags: z.array(z.string()).describe('Historical vessel flags, when published.'),
+        vesselType: z.string().optional().describe('Vessel type / class, when published.'),
+        callSigns: z.array(z.string()).describe('Published call signs.'),
+        tonnage: z.string().optional().describe('Tonnage as published.'),
+        grossRegisteredTonnage: z
+          .string()
+          .optional()
+          .describe('Gross registered tonnage, when published separately.'),
+      })
+      .optional()
+      .describe('Vessel-specific metadata, when published by the source.'),
     remarks: z
       .string()
       .optional()
@@ -142,6 +178,7 @@ export const getDesignationTool = tool('sanctions_get_designation', {
       addresses: d.payload.addresses,
       datesOfBirth: d.payload.datesOfBirth,
       nationalities: d.payload.nationalities,
+      ...(d.payload.vesselDetails ? { vesselDetails: d.payload.vesselDetails } : {}),
       ...(d.payload.remarks ? { remarks: d.payload.remarks } : {}),
       caveat: SCREENING_CAVEAT,
     };
@@ -177,6 +214,23 @@ export const getDesignationTool = tool('sanctions_get_designation', {
     }
     if (r.nationalities.length > 0)
       lines.push(`\n**Nationalities:** ${r.nationalities.join(', ')}`);
+    if (r.vesselDetails) {
+      lines.push('\n## Vessel details');
+      if (r.vesselDetails.flag) lines.push(`- **Flag:** ${r.vesselDetails.flag}`);
+      if (r.vesselDetails.formerFlags.length > 0) {
+        lines.push(`- **Former flags:** ${r.vesselDetails.formerFlags.join(', ')}`);
+      }
+      if (r.vesselDetails.vesselType) {
+        lines.push(`- **Vessel type:** ${r.vesselDetails.vesselType}`);
+      }
+      if (r.vesselDetails.callSigns.length > 0) {
+        lines.push(`- **Call signs:** ${r.vesselDetails.callSigns.join(', ')}`);
+      }
+      if (r.vesselDetails.tonnage) lines.push(`- **Tonnage:** ${r.vesselDetails.tonnage}`);
+      if (r.vesselDetails.grossRegisteredTonnage) {
+        lines.push(`- **Gross registered tonnage:** ${r.vesselDetails.grossRegisteredTonnage}`);
+      }
+    }
     if (r.remarks) lines.push(`\n**Remarks:** ${r.remarks}`);
     lines.push(`\n> ${r.caveat}`);
     return [{ type: 'text', text: lines.join('\n') }];

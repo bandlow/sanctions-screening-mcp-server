@@ -20,6 +20,9 @@ export const DEFAULT_SOURCE_URLS = {
     'https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content?token=dG9rZW4tMjAxNw',
   ukSanctions: 'https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-List.xml',
   unSc: 'https://scsanctions.un.org/resources/xml/en/consolidated.xml',
+  bisEntity: '',
+  bisDpl: '',
+  bisUnverified: '',
   gleifGoldenCopyBase: 'https://goldencopy.gleif.org',
 } as const;
 
@@ -34,6 +37,17 @@ const ServerConfigSchema = z.object({
     .describe(
       'Cron for the scheduled refresh of the sanctions lists + name index (HTTP transport only). GLEIF deltas are not applied on the cron — refresh them manually with mirror:refresh.',
     ),
+  restHttpPort: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(65535)
+    .default(0)
+    .describe('Public REST port; 0 uses MCP_HTTP_PORT + 1.'),
+  restMcpProxyHost: z
+    .string()
+    .default('127.0.0.1')
+    .describe('Internal host used by the REST facade to proxy /mcp requests.'),
   fuzzyMinScore: z.coerce
     .number()
     .min(0)
@@ -66,6 +80,20 @@ const ServerConfigSchema = z.object({
     .string()
     .default(DEFAULT_SOURCE_URLS.unSc)
     .describe('UN Security Council consolidated XML URL.'),
+  bisEntityUrl: z
+    .string()
+    .default(DEFAULT_SOURCE_URLS.bisEntity)
+    .describe('Optional US BIS Entity List CSV URL. Leave empty to disable this source.'),
+  bisDplUrl: z
+    .string()
+    .default(DEFAULT_SOURCE_URLS.bisDpl)
+    .describe(
+      'Optional US BIS Denied Persons List (DPL) CSV URL. Leave empty to disable this source.',
+    ),
+  bisUnverifiedUrl: z
+    .string()
+    .default(DEFAULT_SOURCE_URLS.bisUnverified)
+    .describe('Optional US BIS Unverified List CSV URL. Leave empty to disable this source.'),
   gleifGoldenCopyBaseUrl: z
     .string()
     .default(DEFAULT_SOURCE_URLS.gleifGoldenCopyBase)
@@ -81,6 +109,8 @@ export function getServerConfig(): ServerConfig {
   _config ??= parseEnvConfig(ServerConfigSchema, {
     mirrorPath: 'SANCTIONS_MIRROR_PATH',
     refreshCron: 'SANCTIONS_REFRESH_CRON',
+    restHttpPort: 'REST_HTTP_PORT',
+    restMcpProxyHost: 'REST_MCP_PROXY_HOST',
     fuzzyMinScore: 'SANCTIONS_FUZZY_MIN_SCORE',
     fuzzyMaxResults: 'SANCTIONS_FUZZY_MAX_RESULTS',
     ofacSdnUrl: 'OFAC_SDN_URL',
@@ -88,6 +118,9 @@ export function getServerConfig(): ServerConfig {
     euFsfUrl: 'EU_FSF_URL',
     ukSanctionsUrl: 'UK_SANCTIONS_URL',
     unScUrl: 'UN_SC_URL',
+    bisEntityUrl: 'BIS_ENTITY_URL',
+    bisDplUrl: 'BIS_DPL_URL',
+    bisUnverifiedUrl: 'BIS_UNVERIFIED_URL',
     gleifGoldenCopyBaseUrl: 'GLEIF_GOLDEN_COPY_BASE_URL',
   });
   return _config;

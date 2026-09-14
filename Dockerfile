@@ -110,10 +110,16 @@ RUN echo '{"compilerOptions":{"baseUrl":".","paths":{"@/*":["./dist/*"]}}}' > ts
 RUN mkdir -p /var/log/sanctions-screening-mcp-server && chown -R bun:bun /var/log/sanctions-screening-mcp-server
 
 # Writable data dir for the on-disk SQLite mirror (SANCTIONS_MIRROR_PATH defaults
-# to ./data/sanctions.db), owned by the runtime user. Mount a volume over it in
-# production so the populated mirror survives restarts; run `bun run mirror:init`
-# (docker exec) to populate it.
+# to ./data/sanctions.db), owned by the runtime user. A volume mounted over this
+# directory intentionally replaces the bundled mirror when persistent storage is
+# available; otherwise the pre-populated files below are used as image content.
 RUN mkdir -p /usr/src/app/data && chown -R bun:bun /usr/src/app/data
+
+# Include the pre-populated SQLite mirrors in the image when the build context
+# contains them. Only the database files are copied; SQLite -wal/-shm files are
+# runtime state and must not be shipped between processes.
+COPY --from=build /usr/src/app/data/*.db ./data/
+RUN chown -R bun:bun /usr/src/app/data
 
 # Switch to the non-root user
 USER bun

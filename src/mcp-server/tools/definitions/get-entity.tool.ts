@@ -30,7 +30,11 @@ export const getEntityTool = tool('sanctions_get_entity', {
   title: 'sanctions-screening-mcp-server: get entity',
   description:
     'Fetch the full GLEIF Level 1 record for one LEI: legal name, other/trading names, legal and headquarters addresses, registration status, jurisdiction, registration authority and ID, and last-update date — plus any sanctions hits screened against the same legal name across all loaded watchlists. The screening cross-reference is a screening AID: a hit is a candidate to verify against the official source, and no hit is not a clearance. screeningStatus says whether that cross-reference actually ran — an empty sanctionsHits under not_ready means the sanctions mirror was unavailable, not that nothing matched. sanctionsScreen says whether the hit list is the whole set: it reports how many potential matches existed before the cap, so a capped cross-reference is distinguishable from a complete one. LEI must be a 20-character GLEIF identifier (18 alphanumerics + 2 check digits).',
-  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  annotations: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   input: z.object({
     lei: z
       .string()
@@ -68,7 +72,16 @@ export const getEntityTool = tool('sanctions_get_entity', {
         z
           .object({
             source: z
-              .enum(['ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un'])
+              .enum([
+                'ofac_sdn',
+                'ofac_consolidated',
+                'eu',
+                'uk',
+                'un',
+                'us_bis_entity',
+                'us_bis_dpl',
+                'us_bis_unverified',
+              ])
               .describe('Watchlist the candidate is on.'),
             sourceLabel: z.string().describe('Human-readable source list name.'),
             sourceEntryId: z
@@ -190,7 +203,9 @@ export const getEntityTool = tool('sanctions_get_entity', {
         ? { registrationAuthorityId: entity.registrationAuthorityId }
         : {}),
       ...(entity.registrationAuthorityEntityId
-        ? { registrationAuthorityEntityId: entity.registrationAuthorityEntityId }
+        ? {
+            registrationAuthorityEntityId: entity.registrationAuthorityEntityId,
+          }
         : {}),
       ...(entity.lastUpdate ? { lastUpdate: entity.lastUpdate } : {}),
       sanctionsHits: (screen?.hits ?? []).map((h) => ({

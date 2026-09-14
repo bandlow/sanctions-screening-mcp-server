@@ -1,10 +1,42 @@
 # Doku: Umsetzung Punkt 1 und 2 (REST-Fassade)
 
+## Aktueller API-Zuschnitt (2026-09-11)
+
+Die REST-Fassade dieses Projekts ist ausschliesslich eine Screening-Schnittstelle
+fuer die separate CAP-Anwendung `sanctions-audit-server`.
+
+Aktive REST-Endpunkte:
+
+- `GET /api/v1/sources`
+- `GET /api/v1/designations/{source}/{entryId}`
+- `POST /api/v1/screening/business-partner`
+- `POST /api/v1/screening/identifier`
+
+Audit, Cases, Exceptions, Freigaben, SAP-Trigger und Batch-Orchestrierung werden
+nicht mehr vom Screening-Server angeboten. Diese Verantwortung liegt bei der
+CAP-Anwendung und deren persistenter Audit-Schicht.
+
+Der Identifier-Endpunkt nutzt die normalisierten Quell-Identifiers und
+unterstuetzt unter anderem IMO-, Pass-, Steuer- und Registrierungsnummern.
+Ein Identifier-Token wie `9218478` wird gegen einen publizierten Wert wie
+`IMO 9218478` als exakter Identifier-Treffer erkannt. Geburtsdaten werden
+weiterhin nur in den Detaildaten ausgegeben und noch nicht als Suchfilter
+verwendet.
+
+Die folgenden historischen MVP-Routen wurden aus Runtime und Vertrag entfernt:
+
+- `/api/v1/screening/business-partner/{bpId}/history`
+- `/api/v1/screening/batch`
+- `/api/v1/exceptions/*`
+- `/api/v1/compliance/cases/*`
+- `/api/v1/integration/sap/*`
+
 Datum: 2026-09-04
 
 ## Ziel
 
 Punkt 1 und 2 aus der Todo-Liste vollstaendig machen:
+
 - API-Vertrag fuer die REST-Fassade festziehen.
 - Endpunkte, Schemas, Fehlercodes, Idempotenz und Timeout klar dokumentieren.
 - REST-Fassade im Server vollstaendig verdrahten und die benoetigten Endpunkte funktional bereitstellen.
@@ -16,6 +48,7 @@ Punkt 1 und 2 aus der Todo-Liste vollstaendig machen:
 Datei: docs/rest-facade-openapi.yaml
 
 Inhalt:
+
 - OpenAPI 3.1 Dokument fuer die REST-Fassade.
 - Enthaltene Endpunkte:
   - GET /api/v1/sources
@@ -36,6 +69,7 @@ Inhalt:
 Datei: src/rest/rest-facade.ts
 
 Aenderungen:
+
 - Neue Endpunkte jetzt fachlich umgesetzt (statt 501-Platzhalter):
   - GET /api/v1/screening/business-partner/{bpId}/history
   - POST /api/v1/screening/batch
@@ -67,6 +101,7 @@ Aenderungen:
 Datei: README.md
 
 Aenderungen:
+
 - REST-Abschnitt um API-Vertragsinfos ergaenzt:
   - Verweis auf docs/rest-facade-openapi.yaml
   - Timeout-Vertrag (30000ms)
@@ -77,6 +112,7 @@ Aenderungen:
 ## Ergebnis
 
 Punkt 1 und 2 sind jetzt abgeschlossen:
+
 - Die REST-Fassade hat einen formalen, versionierbaren API-Vertrag.
 - Alle in der Planung genannten Endpunkte sind im Vertrag enthalten.
 - Alle Endpunkte sind im Runtime-Verhalten erreichbar und nicht mehr nur als Platzhalter vorhanden.
@@ -98,6 +134,7 @@ Datum: 2026-09-04
 ## Ziel
 
 Punkt 3 aus der Umsetzungsreihenfolge realisieren:
+
 - Eine bedienbare Compliance-Fallbearbeitungsoberflaeche bereitstellen.
 - Die benoetigten Case-APIs im REST-Layer funktional auspraegen.
 - Entscheidungsfluss inkl. optionalem Vier-Augen-Feld modellieren.
@@ -109,6 +146,7 @@ Punkt 3 aus der Umsetzungsreihenfolge realisieren:
 Datei: src/rest/rest-facade.ts
 
 Aenderungen:
+
 - Neue REST-Endpunkte fachlich umgesetzt:
   - GET /api/v1/compliance/cases
   - GET /api/v1/compliance/cases/{caseId}
@@ -129,6 +167,7 @@ Aenderungen:
 Datei: src/rest/rest-facade.ts
 
 Aenderungen:
+
 - Neue UI-Route umgesetzt:
   - GET /ui/compliance-cases
 - Enthaltene Funktionen der UI:
@@ -140,10 +179,12 @@ Aenderungen:
 ### 3) API-Vertrag und README aktualisiert
 
 Dateien:
+
 - docs/rest-facade-openapi.yaml
 - README.md
 
 Aenderungen:
+
 - OpenAPI um Compliance-Case-Paths und Schemas erweitert.
 - README-Rolloutliste um die drei Case-Endpunkte erweitert.
 - README um den neuen UI-Einstiegspunkt `/ui/compliance-cases` ergaenzt.
@@ -151,6 +192,7 @@ Aenderungen:
 ## Ergebnis
 
 Punkt 3 ist als MVP umgesetzt und dokumentiert:
+
 - Es gibt eine lauffaehige Fallbearbeitungsoberflaeche fuer Compliance-Cases.
 - Der zugehoerige REST-Vertrag ist formal beschrieben.
 - Cases werden automatisch aus Screening-Treffern erzeugt und koennen manuell entschieden werden.
@@ -160,3 +202,176 @@ Punkt 3 ist als MVP umgesetzt und dokumentiert:
 - Der Case-/Decision-Zustand ist aktuell bewusst In-Process (kein persistenter Speicher).
 - Fuer produktiven Betrieb ist die Verlagerung in die geplante CAP/HANA-Schicht weiterhin vorgesehen.
 - Die Screening-Caveat-Logik bleibt unveraendert: Treffer sind Kandidaten zur Verifikation, keine automatische Entscheidung.
+
+---
+
+# Doku: Umsetzung Punkt 4 (SAP-Integrationsmuster)
+
+Datum: 2026-09-07
+
+## Ziel
+
+Punkt 4 aus der Umsetzungsreihenfolge realisieren:
+
+- Technische Eingangskanaele fuer SAP-ECC- und SAP-S/4HANA-Trigger bereitstellen.
+- SAP-spezifische Payloads auf den bestehenden Screening-Kern mappen (ohne doppelte Fachlogik).
+- Integration formal im OpenAPI-Vertrag dokumentieren.
+
+## Durchgefuehrte Aenderungen
+
+### 1) SAP-Adapter-Endpunkte in der REST-Fassade implementiert
+
+Datei: src/rest/rest-facade.ts
+
+Aenderungen:
+
+- Neue Endpunkte umgesetzt:
+  - POST /api/v1/integration/sap/ecc/business-partner-changed
+  - POST /api/v1/integration/sap/s4/business-partner-changed
+  - POST /api/v1/integration/sap/batch-business-partners
+- Fachliches Verhalten:
+  - ECC- und S/4-Realtime-Payloads werden auf das bestehende Business-Partner-Screening gemappt.
+  - Batch-Payloads werden eintragsweise verarbeitet und liefern Zaehler + Fehlerliste zurueck.
+  - Treffer bleiben strikt als Kandidaten zur Verifikation (Caveat unveraendert).
+- Konsistenz im Nebenverhalten:
+  - Erfolgreiche SAP-Screenings schreiben wie die bestehenden REST-Routen in History.
+  - Bei Treffern wird die vorhandene Case-Erzeugungslogik wiederverwendet.
+  - Side-Effects wurden in eine gemeinsame Hilfsfunktion zusammengefuehrt, um Unterschiede zwischen Endpunkten zu vermeiden.
+
+### 2) OpenAPI-Vertrag erweitert
+
+Datei: docs/rest-facade-openapi.yaml
+
+Aenderungen:
+
+- Neue Pfade inkl. Request-/Response-Schemas fuer SAP-Integration hinzugefuegt.
+- Neuer Tag `SapIntegration` fuer klare Gruppierung.
+- Implementierungsstatus fuer alle neuen SAP-Operationen auf `implemented` gesetzt.
+
+### 3) README aktualisiert
+
+Datei: README.md
+
+Aenderungen:
+
+- Rollout-Status um die drei SAP-Adapter-Endpunkte erweitert.
+- Beispielaufrufe fuer ECC-Realtime, S/4-Realtime und SAP-Batch hinzugefuegt.
+
+### 4) Testabdeckung erweitert
+
+Datei: tests/rest/rest-facade.test.ts
+
+Aenderungen:
+
+- Zuschnitt auf die neuen SAP-Adapter-Endpunkte ergaenzt.
+- Verifiziert werden:
+  - Realtime-Aufrufpfad fuer ECC inkl. Screening-Antwort.
+  - Realtime-Aufrufpfad fuer S/4 inkl. Screening-Antwort.
+  - Batch-Aufrufpfad inkl. `202 accepted` und Zaehlerfeldern.
+
+## Ergebnis
+
+Punkt 4 ist im aktuellen Serverstand umgesetzt:
+
+- SAP-spezifische Eingangspayloads koennen direkt an dedizierte Integrationsendpunkte gesendet werden.
+- Die Verarbeitung nutzt weiterhin den bestehenden Screening-Kern und bleibt damit konsistent zur restlichen REST-Fassade.
+- Die Integrationsschnittstelle ist im OpenAPI-Vertrag formal beschrieben und im README mit Beispielaufrufen dokumentiert.
+
+## Hinweise
+
+- Die neuen SAP-Adapter sind bewusst als In-Process-Implementierung ausgepraegt (identisch zum aktuellen REST-MVP-Charakter).
+- Entsprechend dem Zielbild bleibt fuer produktiven Compliance-Betrieb die persistente CAP/HANA-Schicht fuer Audit/Fallbearbeitung weiterhin erforderlich.
+
+---
+
+# Doku: Umsetzung Punkt 5 (Exportkontroll-Quellen BIS)
+
+Datum: 2026-09-07
+
+## Ziel
+
+Punkt 5 aus der Umsetzungsreihenfolge realisieren:
+
+- BIS-Exportkontrollquellen (Entity List, Denied Persons List, Unverified List) in den bestehenden Ingest- und Screening-Stack integrieren.
+- Die neuen Quellen als vollwertige `source`-Codes in MCP- und REST-Vertraegen fuehren.
+- Optionales Aktivieren ueber URL-Overrides erlauben, ohne den Standardbetrieb zu brechen.
+
+## Durchgefuehrte Aenderungen
+
+### 1) Quellenmodell und Konfiguration erweitert
+
+Dateien:
+
+- src/services/screening/types.ts
+- src/config/server-config.ts
+
+Aenderungen:
+
+- Neue Source-Codes eingefuehrt:
+  - `us_bis_entity`
+  - `us_bis_dpl`
+  - `us_bis_unverified`
+- Labels in `SOURCE_LABELS` fuer alle drei BIS-Listen ergaenzt.
+- Neue optionale URL-Overrides in der Server-Konfiguration ergaenzt:
+  - `BIS_ENTITY_URL`
+  - `BIS_DPL_URL`
+  - `BIS_UNVERIFIED_URL`
+- Standardwert bleibt leer: Ist keine URL gesetzt, wird die jeweilige BIS-Liste nicht ingestiert.
+
+### 2) Ingest-Pipeline um BIS-CSV erweitert
+
+Datei:
+
+- src/services/screening/sanctions-ingest.ts
+
+Aenderungen:
+
+- CSV-Parser und Streaming-Ingest fuer BIS-Quellen implementiert.
+- Feldmapping auf das bestehende `designation`-Schema umgesetzt (inkl. Name, Entity-Typ, Programm, Datum, Adresse und Identifier falls vorhanden).
+- Rejection-Tracking (`missingIdentifier`, `unusableName`) fuer BIS in die bestehende Erntelogik integriert.
+- In `buildSanctionsIngesters()` werden BIS-Ingester nur registriert, wenn die jeweilige URL konfiguriert ist.
+
+### 3) MCP-, Resource- und REST-Vertraege auf BIS angehoben
+
+Dateien:
+
+- src/mcp-server/tools/definitions/screen-name.tool.ts
+- src/mcp-server/tools/definitions/search-identifier.tool.ts
+- src/mcp-server/tools/definitions/get-designation.tool.ts
+- src/mcp-server/tools/definitions/get-entity.tool.ts
+- src/mcp-server/tools/definitions/trace-ownership.tool.ts
+- src/mcp-server/resources/definitions/designation.resource.ts
+- src/rest/rest-facade.ts
+- docs/rest-facade-openapi.yaml
+
+Aenderungen:
+
+- Alle relevanten `source`-Enums um die drei BIS-Codes erweitert.
+- Source-Metadaten (`licenses`, URL-Aufloesung) um BIS-Eintraege ergaenzt.
+- REST- und OpenAPI-Schemas aktualisiert, damit BIS als gueltige Quelle durchgaengig akzeptiert und ausgegeben wird.
+
+### 4) Testabdeckung erweitert
+
+Dateien:
+
+- tests/services/ingest-parsers.test.ts
+- tests/fuzz/ingest-and-matcher.fuzz.test.ts
+
+Aenderungen:
+
+- Neue Parser-Tests fuer BIS-CSV hinzugefuegt.
+- Stream-vs-Buffer-Aequivalenz fuer BIS-CSV ueber verschiedene Chunk-Groessen verifiziert.
+- Fuzz-Invariante ergaenzt, dass beliebige Eingaben fuer BIS-CSV robust in leere Ergebnisse fallen (statt Ausfall).
+
+## Ergebnis
+
+Punkt 5 ist im aktuellen Serverstand umgesetzt:
+
+- BIS-Exportkontrolllisten koennen als zusaetzliche Screening-Quellen ingestiert werden.
+- Die Quellen sind vertraglich in MCP, REST und OpenAPI konsistent sichtbar.
+- Ohne gesetzte BIS-URLs bleibt das bisherige Verhalten unveraendert; mit gesetzten URLs werden die BIS-Listen in den Mirror-Lauf aufgenommen.
+
+## Hinweise
+
+- Die BIS-Aktivierung ist absichtlich opt-in ueber Konfiguration, damit bestehende Deployments ohne BIS-URLs unveraendert weiterlaufen.
+- Das Caveat bleibt unveraendert: Treffer sind Screening-Kandidaten zur Verifikation, keine Compliance-Entscheidung.
