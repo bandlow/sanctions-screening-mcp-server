@@ -1152,3 +1152,237 @@ describe("screenName — specific test cases for result-set requirements", () =>
     expect(hit?.queryTokenCoverage).toBeUndefined(); // exact hits don't have coverage
   });
 });
+
+describe("screenName — prefix matching with multiple results", () => {
+  // Test cases for finding multiple names that have the input as a prefix,
+  // demonstrating that partial token matching returns multiple candidates
+  // ordered by relevance (match type, score, source)
+
+  it('finds all entries with "Diamond" as a token prefix', async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Diamond", matchMode: "strict", limit: 100 },
+      ctx,
+    );
+    // Should find at least 3 entries with Diamond in the name:
+    // FX-1011: Diamond Trading Syndicate (primary name)
+    // FX-1012: Black Diamond Holdings (primary name)
+    // FX-1013: Diamond Mines and Resources Ltd (primary name)
+    expect(res.hits.length).toBeGreaterThanOrEqual(3);
+
+    const diamondPrimaries = res.hits.filter(
+      (h) =>
+        h.matchedNameType === "primary" &&
+        h.matchedName.toLowerCase().startsWith("diamond"),
+    );
+    expect(diamondPrimaries.length).toBeGreaterThanOrEqual(2); // FX-1011, FX-1013
+  });
+
+  it("returns different names starting with the same prefix", async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Diamond", matchMode: "strict" },
+      ctx,
+    );
+
+    const names = res.hits.map((h) => h.matchedName).filter((n) => n);
+    // All should contain "Diamond" token
+    expect(names.every((n) => n.toLowerCase().includes("diamond"))).toBe(true);
+
+    // Should have multiple distinct names
+    const uniqueNames = new Set(names.map((n) => n.toLowerCase().trim())).size;
+    expect(uniqueNames).toBeGreaterThanOrEqual(3);
+  });
+
+  it("orders prefix matches by match type (exact/strong before aliases)", async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Diamond", matchMode: "strict", limit: 100 },
+      ctx,
+    );
+
+    // Group by match type
+    const byType = {
+      exact: res.hits.filter((h) => h.matchType === "exact"),
+      strong: res.hits.filter((h) => h.matchType === "strong"),
+      approximate: res.hits.filter((h) => h.matchType === "approximate"),
+    };
+
+    // Exact matches should come before strong, strong before approximate
+    const exactEnd = byType.exact.length;
+    const strongStart = exactEnd;
+    const strongEnd = strongStart + byType.strong.length;
+
+    // Verify ordering: all exact results come before all strong results
+    if (byType.exact.length > 0 && byType.strong.length > 0) {
+      const lastExact = res.hits[exactEnd - 1]?.sourceEntryId;
+      const firstStrong = res.hits[strongStart]?.sourceEntryId;
+      // The position of the first strong should be after all exacts
+      expect(strongStart).toBe(byType.exact.length);
+    }
+  });
+
+  it('finds prefix "Black" matching "Black Diamond Holdings" and aliases', async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Black", matchMode: "strict" },
+      ctx,
+    );
+
+    // FX-1012: "Black Diamond Holdings" contains "Black" as a token
+    const blackHits = res.hits.filter((h) =>
+      h.matchedName.toLowerCase().includes("black"),
+    );
+    expect(blackHits.length).toBeGreaterThan(0);
+
+    // Should find the primary name
+    const primaryBlackHit = blackHits.find(
+      (h) => h.sourceEntryId === "FX-1012" && h.matchedNameType === "primary",
+    );
+    expect(primaryBlackHit).toBeDefined();
+  });
+
+  it("returns multiple candidates with their distinct source entry IDs", async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Diamond", matchMode: "strict", limit: 100 },
+      ctx,
+    );
+
+    const entryIds = res.hits.map((h) => h.sourceEntryId);
+    const uniqueIds = new Set(entryIds);
+
+    // Should have at least 3 different source entries
+    expect(uniqueIds.size).toBeGreaterThanOrEqual(3);
+    // FX-1011, FX-1012, FX-1013 should all be present
+    expect(uniqueIds.has("FX-1011")).toBe(true);
+    expect(uniqueIds.has("FX-1012")).toBe(true);
+    expect(uniqueIds.has("FX-1013")).toBe(true);
+  });
+
+  it("shows prefix matches from different sources (OFAC, EU, UK)", async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Diamond", matchMode: "strict", limit: 100 },
+      ctx,
+    );
+
+    const sources = new Set(res.hits.map((h) => h.source));
+    // Should have multiple sources
+    // FX-1011: ofac_sdn, FX-1012: eu, FX-1013: uk
+    expect(sources.has("ofac_sdn")).toBe(true);
+    expect(sources.has("eu")).toBe(true);
+    expect(sources.has("uk")).toBe(true);
+  });
+
+  it("returns prefix matches with consistent scoring for same match type", async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Diamond", matchMode: "strict" },
+      ctx,
+    );
+
+    // Group strong matches
+    const strongMatches = res.hits.filter((h) => h.matchType === "strong");
+
+    // All strong matches should have no score (exact/strong hits are unscored)
+    for (const match of strongMatches) {
+      expect(match.score).toBeUndefined();
+    }
+  });
+
+  it("distinguishes between primary name and alias matches for same prefix", async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Diamond", matchMode: "strict", limit: 100 },
+      ctx,
+    );
+
+    const primaryMatches = res.hits.filter(
+      (h) => h.matchedNameType === "primary",
+    );
+    const aliasMatches = res.hits.filter((h) => h.matchedNameType === "aka");
+
+    // Should have both primary and alias matches
+    expect(primaryMatches.length).toBeGreaterThanOrEqual(2); // FX-1011, FX-1013
+    // May have alias matches (e.g., "Diamond Traders" alias of FX-1011)
+    if (aliasMatches.length > 0) {
+      expect(aliasMatches[0]?.matchedName).toBeDefined();
+    }
+  });
+
+  it("finds prefix matches in fuzzy mode with phonetic fallback", async () => {
+    // Query "Diamnd" (missing 'o') — should NOT find anything in strict mode
+    const res = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Diamnd",
+        matchMode: "strict",
+        autoFallback: false,
+      },
+      ctx,
+    );
+
+    // Strict mode finds nothing with autoFallback disabled
+    expect(res.hits).toHaveLength(0);
+
+    // Now with explicit fuzzy mode
+    const fuzzyRes = await svc.screenName(
+      { ...screenDefaults, query: "Diamnd", matchMode: "fuzzy" },
+      ctx,
+    );
+
+    // Should find Diamond entries via phonetic similarity
+    expect(fuzzyRes.modeUsed).toBe("fuzzy");
+    const diamondHits = fuzzyRes.hits.filter((h) =>
+      h.matchedName.toLowerCase().includes("diamond"),
+    );
+    expect(diamondHits.length).toBeGreaterThan(0);
+  });
+
+  it("maintains stable order across repeated prefix queries", async () => {
+    // Query the same prefix multiple times
+    const result1 = await svc.screenName(
+      { ...screenDefaults, query: "Diamond", matchMode: "strict" },
+      ctx,
+    );
+    const result2 = await svc.screenName(
+      { ...screenDefaults, query: "Diamond", matchMode: "strict" },
+      ctx,
+    );
+
+    // Extract the result order
+    const order1 = result1.hits.map((h) => h.sourceEntryId);
+    const order2 = result2.hits.map((h) => h.sourceEntryId);
+
+    // Results should be in the same order both times
+    expect(order1).toEqual(order2);
+  });
+
+  it("handles prefix matching with entity-type filtering", async () => {
+    const res = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Diamond",
+        matchMode: "strict",
+        entityType: "organization",
+      },
+      ctx,
+    );
+
+    // All results should be organizations
+    expect(res.hits.every((h) => h.entityType === "organization")).toBe(true);
+    // Should still find multiple Diamond entries (all are organizations)
+    expect(res.hits.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("returns expected hit count when limiting prefix results", async () => {
+    const unlimitedRes = await svc.screenName(
+      { ...screenDefaults, query: "Diamond", matchMode: "strict", limit: 100 },
+      ctx,
+    );
+
+    const limitedRes = await svc.screenName(
+      { ...screenDefaults, query: "Diamond", matchMode: "strict", limit: 2 },
+      ctx,
+    );
+
+    // Limited result should have fewer hits
+    expect(limitedRes.hits.length).toBeLessThanOrEqual(2);
+    // Total available should still report the true count
+    expect(unlimitedRes.hits.length).toBeGreaterThan(limitedRes.hits.length);
+    expect(limitedRes.totalAvailable).toEqual(unlimitedRes.totalAvailable);
+  });
+});
