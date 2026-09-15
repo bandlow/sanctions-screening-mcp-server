@@ -20,7 +20,10 @@ export const getDesignationTool = tool('sanctions_get_designation', {
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
   input: z.object({
     source: z
-      .enum(['ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un'])
+      .enum([
+        'ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un',
+        'us_bis_entity', 'us_bis_dpl', 'us_bis_unverified',
+      ])
       .describe('Which source list the entry belongs to.'),
     entryId: z
       .string()
@@ -29,7 +32,10 @@ export const getDesignationTool = tool('sanctions_get_designation', {
   }),
   output: z.object({
     source: z
-      .enum(['ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un'])
+      .enum([
+        'ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un',
+        'us_bis_entity', 'us_bis_dpl', 'us_bis_unverified',
+      ])
       .describe('Source list the entry belongs to.'),
     sourceLabel: z.string().describe('Human-readable name of the source list.'),
     sourceEntryId: z.string().describe("The source list's own entry ID."),

@@ -26,6 +26,9 @@ export const SOURCE_LICENSES: Record<SourceCode, string> = {
   eu: 'EU consolidated list — freely redistributable',
   uk: 'Open Government Licence v3.0 (attribution required)',
   un: 'Freely redistributable',
+  us_bis_entity: 'US Government public domain',
+  us_bis_dpl: 'US Government public domain',
+  us_bis_unverified: 'US Government public domain',
 };
 
 /** GLEIF golden copy is CC0 — cited but no attribution required. */
@@ -47,6 +50,9 @@ export function sourceUrls(): Record<SourceCode, string> {
     eu: cfg.euFsfUrl,
     uk: cfg.ukSanctionsUrl,
     un: cfg.unScUrl,
+    us_bis_entity: cfg.bisEntityUrl,
+    us_bis_dpl: cfg.bisDplUrl,
+    us_bis_unverified: cfg.bisUnverifiedUrl,
   };
 }
 

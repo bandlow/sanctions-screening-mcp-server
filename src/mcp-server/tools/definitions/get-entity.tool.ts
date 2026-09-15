@@ -68,7 +68,10 @@ export const getEntityTool = tool('sanctions_get_entity', {
         z
           .object({
             source: z
-              .enum(['ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un'])
+              .enum([
+                'ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un',
+                'us_bis_entity', 'us_bis_dpl', 'us_bis_unverified',
+              ])
               .describe('Watchlist the candidate is on.'),
             sourceLabel: z.string().describe('Human-readable source list name.'),
             sourceEntryId: z
@@ -164,18 +167,18 @@ export const getEntityTool = tool('sanctions_get_entity', {
     const screeningStatus: 'screened' | 'not_ready' = sanctionsReady ? 'screened' : 'not_ready';
     const screen = sanctionsReady
       ? await svc.screenName(
-          {
-            query: entity.legalName,
-            entityType: 'any',
-            matchMode: 'strict',
-            // Cross-reference screen: strict only. Auto-fuzzy on a generic legal
-            // name floods the result with single-common-token false positives.
-            autoFallback: false,
-            sources: [...SOURCE_CODES],
-            limit: CROSS_REFERENCE_SCREEN_LIMIT,
-          },
-          ctx,
-        )
+        {
+          query: entity.legalName,
+          entityType: 'any',
+          matchMode: 'strict',
+          // Cross-reference screen: strict only. Auto-fuzzy on a generic legal
+          // name floods the result with single-common-token false positives.
+          autoFallback: false,
+          sources: [...SOURCE_CODES],
+          limit: CROSS_REFERENCE_SCREEN_LIMIT,
+        },
+        ctx,
+      )
       : undefined;
 
     return {
@@ -204,14 +207,14 @@ export const getEntityTool = tool('sanctions_get_entity', {
       })),
       ...(screen
         ? {
-            sanctionsScreen: {
-              totalAvailable: screen.totalAvailable,
-              totalAvailableBasis: screen.totalAvailableBasis,
-              // The cross-reference never pages, so whatever the cap left behind
-              // is everything past the hits returned here.
-              hasMore: screen.hits.length < screen.totalAvailable,
-            },
-          }
+          sanctionsScreen: {
+            totalAvailable: screen.totalAvailable,
+            totalAvailableBasis: screen.totalAvailableBasis,
+            // The cross-reference never pages, so whatever the cap left behind
+            // is everything past the hits returned here.
+            hasMore: screen.hits.length < screen.totalAvailable,
+          },
+        }
         : {}),
       screeningStatus,
       caveat: SCREENING_CAVEAT,
@@ -250,10 +253,9 @@ export const getEntityTool = tool('sanctions_get_entity', {
     if (r.sanctionsScreen) {
       const s = r.sanctionsScreen;
       lines.push(
-        `Screen coverage: showing ${r.sanctionsHits.length} of ${s.totalAvailable} potential match(es) (count basis: ${s.totalAvailableBasis}); more available: ${s.hasMore}${
-          s.hasMore
-            ? ` — screen "${r.legalName}" with sanctions_screen_name to page through the rest.`
-            : ''
+        `Screen coverage: showing ${r.sanctionsHits.length} of ${s.totalAvailable} potential match(es) (count basis: ${s.totalAvailableBasis}); more available: ${s.hasMore}${s.hasMore
+          ? ` — screen "${r.legalName}" with sanctions_screen_name to page through the rest.`
+          : ''
         }`,
       );
     }

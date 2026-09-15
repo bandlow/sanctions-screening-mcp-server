@@ -26,6 +26,7 @@ import {
   createHarvestState,
   type HarvestState,
   parseEu,
+  parseBisCsv,
   parseOfac,
   parseUk,
   parseUn,
@@ -318,6 +319,42 @@ describe('UN parser', () => {
     const org = designations.find((d) => d.sourceEntryId === '6908100');
     expect(org?.entityType).toBe('organization');
     expect(org?.primaryName).toBe('EXAMPLE UN ENTITY');
+  });
+});
+
+describe('BIS CSV parser', () => {
+  it('normalizes Entity, DPL TXT, and UVL CSV shapes', () => {
+    const entity = parseBisCsv(
+      'Source List,Entity Number,Name,Address,City,Country,Effective Date\nEL,123,Entity One,"5, Main Street",Kabul,Afghanistan,11/21/2011',
+      'us_bis_entity',
+    )[0]!;
+    const dpl = parseBisCsv(
+      '"Name","Street_Address","City","State","Country","Effective_Date"\n"Denied Person","1, Main Street","Berlin","","DE","3/20/1992"',
+      'us_bis_dpl',
+    )[0]!;
+    const uvl = parseBisCsv(
+      'COUNTRY,NAME,ADDRESS\nArmenia,Unverified Company,"Komitas 26/114, Yerevan, Armenia"',
+      'us_bis_unverified',
+    )[0]!;
+
+    expect(entity).toMatchObject({
+      id: 'us_bis_entity:123:2',
+      sourceEntryId: '123:2',
+      primaryName: 'Entity One',
+      entityType: 'organization',
+      program: 'US-BIS-ENTITY-LIST',
+    });
+    expect(entity.payload.addresses[0]?.full).toContain('5, Main Street');
+    expect(dpl).toMatchObject({
+      source: 'us_bis_dpl',
+      primaryName: 'Denied Person',
+      program: 'US-BIS-DENIED-PERSONS-LIST',
+    });
+    expect(uvl).toMatchObject({
+      source: 'us_bis_unverified',
+      primaryName: 'Unverified Company',
+      program: 'US-BIS-UNVERIFIED-LIST',
+    });
   });
 });
 

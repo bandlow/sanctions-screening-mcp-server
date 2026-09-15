@@ -14,7 +14,10 @@ import { getScreeningService } from '@/services/screening/screening-service.js';
 import { SOURCE_CODES, SOURCE_LABELS } from '@/services/screening/types.js';
 import { SCREENING_CAVEAT } from './_shared.js';
 
-const SOURCE_ENUM = z.enum(['ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un']);
+const SOURCE_ENUM = z.enum([
+  'ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un',
+  'us_bis_entity', 'us_bis_dpl', 'us_bis_unverified',
+]);
 
 const HitSchema = z
   .object({
@@ -205,8 +208,8 @@ export const screenNameTool = tool('sanctions_screen_name', {
     if (result.totalAvailable === 0) {
       ctx.enrich.notice(
         `No potential match for "${input.name}" across the selected lists (mode: ${result.modeUsed}). ` +
-          'This is NOT a clearance — the entity may be listed under a name variant the mirror does not index, ' +
-          'or under a transliteration. Try matchMode:"fuzzy", a broader name, or verify directly against the official source.',
+        'This is NOT a clearance — the entity may be listed under a name variant the mirror does not index, ' +
+        'or under a transliteration. Try matchMode:"fuzzy", a broader name, or verify directly against the official source.',
       );
     } else if (result.hits.length === 0) {
       ctx.enrich.notice(

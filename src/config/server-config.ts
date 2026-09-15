@@ -20,6 +20,9 @@ export const DEFAULT_SOURCE_URLS = {
     'https://webgate.ec.europa.eu/fsd/fsf/public/files/xmlFullSanctionsList_1_1/content?token=dG9rZW4tMjAxNw',
   ukSanctions: 'https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-List.xml',
   unSc: 'https://scsanctions.un.org/resources/xml/en/consolidated.xml',
+  bisEntity: 'https://media.bis.gov/sites/default/files/documents/entity-list.csv',
+  bisDpl: 'https://media.bis.gov/sites/default/files/documents/denied-persons-list.txt',
+  bisUnverified: 'https://media.bis.gov/sites/default/files/documents/unverified-list.csv',
   gleifGoldenCopyBase: 'https://goldencopy.gleif.org',
 } as const;
 
@@ -66,6 +69,18 @@ const ServerConfigSchema = z.object({
     .string()
     .default(DEFAULT_SOURCE_URLS.unSc)
     .describe('UN Security Council consolidated XML URL.'),
+  bisEntityUrl: z
+    .string()
+    .default(DEFAULT_SOURCE_URLS.bisEntity)
+    .describe('US BIS Entity List CSV URL; set empty to disable this source.'),
+  bisDplUrl: z
+    .string()
+    .default(DEFAULT_SOURCE_URLS.bisDpl)
+    .describe('US BIS Denied Persons List (DPL) CSV URL; set empty to disable this source.'),
+  bisUnverifiedUrl: z
+    .string()
+    .default(DEFAULT_SOURCE_URLS.bisUnverified)
+    .describe('US BIS Unverified List CSV URL; set empty to disable this source.'),
   gleifGoldenCopyBaseUrl: z
     .string()
     .default(DEFAULT_SOURCE_URLS.gleifGoldenCopyBase)
@@ -88,6 +103,9 @@ export function getServerConfig(): ServerConfig {
     euFsfUrl: 'EU_FSF_URL',
     ukSanctionsUrl: 'UK_SANCTIONS_URL',
     unScUrl: 'UN_SC_URL',
+    bisEntityUrl: 'BIS_ENTITY_URL',
+    bisDplUrl: 'BIS_DPL_URL',
+    bisUnverifiedUrl: 'BIS_UNVERIFIED_URL',
     gleifGoldenCopyBaseUrl: 'GLEIF_GOLDEN_COPY_BASE_URL',
   });
   return _config;

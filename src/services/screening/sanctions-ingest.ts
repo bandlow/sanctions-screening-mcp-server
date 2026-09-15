@@ -1,6 +1,6 @@
 /**
  * @fileoverview Sanctions ingesters — one per source (OFAC SDN, OFAC
- * Consolidated, EU FSF, UK Sanctions List, UN SC Consolidated). Each streams its
+ * Consolidated, EU FSF, UK Sanctions List, UN SC Consolidated, and BIS lists). Each streams its
  * source file, lifts out one record element at a time, and maps it onto the
  * common {@link NormalizedDesignation} schema. The {@link createSanctionsSync}
  * factory wires them into the MirrorService `sync` generator: each refresh
@@ -242,6 +242,147 @@ async function* streamFlatRecords(
     const record = normalize(recordBody(doc, fragment.name), fragment.name);
     if (record) yield record;
   }
+}
+
+/** Parse one RFC-4180 row, including quoted commas and escaped quotes. */
+function parseCsvRow(line: string): string[] {
+  const values: string[] = [];
+  let value = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === '"') {
+      if (quoted && line[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (character === ',' && !quoted) {
+      values.push(value.trim());
+      value = '';
+    } else {
+      value += character;
+    }
+  }
+  values.push(value.trim());
+  return values;
+}
+
+function normalizeCsvHeader(value: string): string {
+  return fold(value.replace(/^\uFEFF/, '')).replace(/[^a-z0-9]+/g, '_');
+}
+
+function bisColumn(row: Record<string, string>, ...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = row[normalizeCsvHeader(name)];
+    if (value?.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function bisAddress(row: Record<string, string>): AddressRecord[] {
+  const address = [
+    bisColumn(row, 'Street_Address', 'Address', 'Street'),
+    bisColumn(row, 'City'),
+    bisColumn(row, 'State/Province', 'State'),
+    bisColumn(row, 'Postal_Code', 'Postal Code'),
+    bisColumn(row, 'Country'),
+  ].filter((part): part is string => Boolean(part));
+  return address.length ? [{ full: address.join(', '), ...opt('country', address.at(-1)) }] : [];
+}
+
+function parseBisRow(
+  row: Record<string, string>,
+  source: 'us_bis_entity' | 'us_bis_dpl' | 'us_bis_unverified',
+  rowNumber: number,
+  rejections: IngestRejections,
+): NormalizedDesignation | null {
+  const primary = bisColumn(row, 'Name', 'Entity Name', 'Entity_Name');
+  if (!isUsableName(primary)) {
+    rejections.unusableName += 1;
+    return null;
+  }
+  const address = bisAddress(row);
+  const publishedId = bisColumn(
+    row,
+    'Entity Number',
+    'Entry ID',
+    'Entry Number',
+    'DPL Number',
+    'UVL Number',
+    'Reference Number',
+  );
+  const stableId = publishedId ?? `${fold(primary)}|${fold(address[0]?.full ?? '')}|${fold(bisColumn(row, 'Effective Date', 'Last Update') ?? '')}`;
+  if (!stableId) {
+    rejections.missingIdentifier += 1;
+    return null;
+  }
+  const alternateName = bisColumn(row, 'Alternate Name');
+  const entityType = source === 'us_bis_entity' ? 'organization' : 'unknown';
+  const program = source === 'us_bis_entity'
+    ? 'US-BIS-ENTITY-LIST'
+    : source === 'us_bis_dpl'
+      ? 'US-BIS-DENIED-PERSONS-LIST'
+      : 'US-BIS-UNVERIFIED-LIST';
+  return {
+    id: `${source}:${stableId}:${rowNumber}`,
+    source,
+    sourceEntryId: `${stableId}:${rowNumber}`,
+    entityType,
+    primaryName: primary,
+    program,
+    ...opt('designationDate', bisColumn(row, 'Effective Date', 'Last Update')),
+    payload: {
+      aliases: alternateName ? [{ name: alternateName, nameType: 'aka' }] : [],
+      identifiers: [],
+      addresses: address,
+      datesOfBirth: [],
+      nationalities: [],
+      ...opt('remarks', bisColumn(row, 'Remarks/Notes', 'Action', 'License Policy')),
+    },
+  };
+}
+
+/** Parse a BIS CSV or CSV-formatted TXT download into normalized designations. */
+export function parseBisCsv(
+  text: string,
+  source: 'us_bis_entity' | 'us_bis_dpl' | 'us_bis_unverified',
+  rejections: IngestRejections = createRejections(),
+): NormalizedDesignation[] {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim());
+  const headers = lines.shift();
+  if (!headers) return [];
+  const names = parseCsvRow(headers).map(normalizeCsvHeader);
+  return lines
+    .map((line, index) => {
+      const values = parseCsvRow(line);
+      const row = Object.fromEntries(names.map((name, column) => [name, values[column] ?? '']));
+      return parseBisRow(row, source, index + 2, rejections);
+    })
+    .filter(Boolean) as NormalizedDesignation[];
+}
+
+/** Stream a BIS CSV/TXT response after decoding its bounded, small dataset. */
+export async function* streamBisCsvFromText(
+  textChunks: AsyncIterable<string>,
+  source: 'us_bis_entity' | 'us_bis_dpl' | 'us_bis_unverified',
+  state: HarvestState,
+): AsyncGenerator<NormalizedDesignation> {
+  let text = '';
+  for await (const chunk of textChunks) text += chunk;
+  yield* parseBisCsv(text, source, state.rejections);
+}
+
+function buildBisIngester(
+  source: 'us_bis_entity' | 'us_bis_dpl' | 'us_bis_unverified',
+  url: () => string,
+): SanctionsIngester {
+  return buildStreamingIngester({
+    source,
+    url,
+    stream: (textChunks, state) => streamBisCsvFromText(textChunks, source, state),
+  });
 }
 
 /** How to reach one source and normalize its stream. */
@@ -1501,7 +1642,7 @@ function parseUnEntry(
 
 // ─── Registry + sync factory ─────────────────────────────────────────────────
 
-/** All five sanctions ingesters, configured from the current server config. */
+/** All sanctions ingesters, configured from the current server config. */
 export function buildSanctionsIngesters(): SanctionsIngester[] {
   const cfg = getServerConfig();
   return [
@@ -1510,6 +1651,9 @@ export function buildSanctionsIngesters(): SanctionsIngester[] {
     buildEuIngester(),
     buildUkIngester(),
     buildUnIngester(),
+    buildBisIngester('us_bis_entity', () => cfg.bisEntityUrl),
+    buildBisIngester('us_bis_dpl', () => cfg.bisDplUrl),
+    buildBisIngester('us_bis_unverified', () => cfg.bisUnverifiedUrl),
   ];
 }
 

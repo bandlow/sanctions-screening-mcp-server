@@ -33,7 +33,10 @@ import {
   type SourceCode,
 } from "@/services/screening/types.js";
 
-const SOURCE_ENUM = z.enum(["ofac_sdn", "ofac_consolidated", "eu", "uk", "un"]);
+const SOURCE_ENUM = z.enum([
+  "ofac_sdn", "ofac_consolidated", "eu", "uk", "un",
+  "us_bis_entity", "us_bis_dpl", "us_bis_unverified",
+]);
 
 const BusinessPartnerScreenRequestSchema = z
   .object({
@@ -820,44 +823,44 @@ async function executeScreening(
   reqLog: ContextLogger,
 ): Promise<
   | {
-      body: {
-        businessPartner: {
-          bpId?: string;
-          name: string;
-          country?: string;
-          role?: "customer" | "vendor" | "other";
-        };
-        screening: {
-          normalizedQuery: string;
-          requestedMatchMode: "strict" | "fuzzy";
-          matchModeUsed: "strict" | "fuzzy";
-          entityType: "any" | "person" | "organization" | "vessel" | "aircraft";
-          minScore?: number;
-          sources: Array<z.infer<typeof SOURCE_ENUM>>;
-          sourcesAsOf?: string;
-        };
-        pagination: {
-          limit: number;
-          offset: number;
-          returned: number;
-          totalAvailable: number;
-          totalAvailableBasis: string;
-          hasMore: boolean;
-          nextOffset?: number;
-        };
-        hits: Array<Record<string, unknown>>;
-        notice?: string;
-        caveat: string;
+    body: {
+      businessPartner: {
+        bpId?: string;
+        name: string;
+        country?: string;
+        role?: "customer" | "vendor" | "other";
       };
-    }
+      screening: {
+        normalizedQuery: string;
+        requestedMatchMode: "strict" | "fuzzy";
+        matchModeUsed: "strict" | "fuzzy";
+        entityType: "any" | "person" | "organization" | "vessel" | "aircraft";
+        minScore?: number;
+        sources: Array<z.infer<typeof SOURCE_ENUM>>;
+        sourcesAsOf?: string;
+      };
+      pagination: {
+        limit: number;
+        offset: number;
+        returned: number;
+        totalAvailable: number;
+        totalAvailableBasis: string;
+        hasMore: boolean;
+        nextOffset?: number;
+      };
+      hits: Array<Record<string, unknown>>;
+      notice?: string;
+      caveat: string;
+    };
+  }
   | {
-      status: 503;
-      error: {
-        code: "mirror_not_ready";
-        message: string;
-        recovery: string;
-      };
-    }
+    status: 503;
+    error: {
+      code: "mirror_not_ready";
+      message: string;
+      recovery: string;
+    };
+  }
 > {
   const svc = getScreeningService();
   const sanctions = await svc.sanctionsReadiness();
@@ -1087,8 +1090,8 @@ function normalizeCaseHits(
         : undefined;
     const matchType =
       hit.matchType === "exact" ||
-      hit.matchType === "strong" ||
-      hit.matchType === "approximate"
+        hit.matchType === "strong" ||
+        hit.matchType === "approximate"
         ? hit.matchType
         : undefined;
     if (!source || !sourceEntryId || !matchedName || !matchType) continue;

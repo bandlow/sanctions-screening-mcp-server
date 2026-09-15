@@ -1,13 +1,21 @@
 /**
  * @fileoverview Common normalized schema for sanctions designations and GLEIF
  * legal-entity records, plus the matching-engine vocabulary. Every upstream
- * source (OFAC, EU, UK, UN, GLEIF) collapses onto these shapes so the matching
+ * source (OFAC, EU, UK, UN, BIS, GLEIF) collapses onto these shapes so the matching
  * engine and tools never see a source-specific structure.
  * @module services/screening/types
  */
 
 /** Source list codes — the value stored in `designation.source`. */
-export type SourceCode = 'ofac_sdn' | 'ofac_consolidated' | 'eu' | 'uk' | 'un';
+export type SourceCode =
+  | 'ofac_sdn'
+  | 'ofac_consolidated'
+  | 'eu'
+  | 'uk'
+  | 'un'
+  | 'us_bis_entity'
+  | 'us_bis_dpl'
+  | 'us_bis_unverified';
 
 /** All sanctions source codes, in display order. */
 export const SOURCE_CODES: readonly SourceCode[] = [
@@ -16,6 +24,9 @@ export const SOURCE_CODES: readonly SourceCode[] = [
   'eu',
   'uk',
   'un',
+  'us_bis_entity',
+  'us_bis_dpl',
+  'us_bis_unverified',
 ] as const;
 
 /** Human-facing label per source, used in provenance and `sanctions_list_sources`. */
@@ -25,6 +36,9 @@ export const SOURCE_LABELS: Record<SourceCode, string> = {
   eu: 'EU Consolidated Financial Sanctions List',
   uk: 'UK Sanctions List (FCDO)',
   un: 'UN Security Council Consolidated List',
+  us_bis_entity: 'US BIS Entity List',
+  us_bis_dpl: 'US BIS Denied Persons List',
+  us_bis_unverified: 'US BIS Unverified List (UVL)',
 };
 
 /** Coarse entity classification shared across all sources. */
