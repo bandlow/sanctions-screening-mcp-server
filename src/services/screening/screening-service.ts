@@ -736,7 +736,7 @@ export class ScreeningService {
 
   /**
    * Screen a name against the loaded sanctions lists. Strict mode runs exact
-   * then all-tokens-present (FTS5). Fuzzy mode (explicit, or auto when strict is
+   * then all-query-tokens-as-token-or-prefix-present (FTS5). Fuzzy mode (explicit, or auto when strict is
    * empty) adds Jaro-Winkler + phonetic scoring against the per-alias index.
    */
   async screenName(
@@ -757,7 +757,7 @@ export class ScreeningService {
         ? ""
         : ` AND d.entity_type = '${this.escapeLiteral(opts.entityType)}'`;
 
-    // Step 1+2: exact-normalized, then strict all-tokens-present (FTS5 AND).
+    // Step 1+2: exact-normalized, then strict all-query-tokens token/prefix present (FTS5 AND).
     const strict = this.runStrict(handle, {
       normalizedQuery,
       sourceFilter,
@@ -903,7 +903,7 @@ export class ScreeningService {
       typeFilter: string;
     },
   ): BoundedScan<ScreeningHit> {
-    const match = buildFtsMatch(args.normalizedQuery);
+    const match = buildFtsMatch(args.normalizedQuery, { prefixTokens: true });
     if (!match) return { results: [], capped: false };
 
     // FTS over the name index; join back to name + designation. Classify each

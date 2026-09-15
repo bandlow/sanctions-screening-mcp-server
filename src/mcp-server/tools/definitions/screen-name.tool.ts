@@ -94,7 +94,7 @@ const HitSchema = z
 export const screenNameTool = tool("sanctions_screen_name", {
   title: "sanctions-screening-mcp-server: screen name",
   description:
-    'Screen a name (person, company, vessel, aircraft) against all loaded sanctions watchlists at once — OFAC SDN + Consolidated, EU, UK, and UN — alias- and fuzzy-aware. Returns scored potential matches with the source list, sanctioning program, designation date, and the matched alias. Strict mode (default) matches exact-normalized then all-tokens-present; fuzzy mode (or auto when strict is empty) adds Jaro-Winkler and phonetic matching and labels hits approximate with a raw 0–1 similarity score plus the count of query tokens the candidate covers, which orders candidates that tie on score. Results are paged: totalAvailable and hasMore report matches beyond the returned page, and nextOffset retrieves them. This is a screening AID for a human/compliance review, NOT a compliance determination: a hit means "review this candidate against the official source," and an empty result never means "cleared."',
+    'Screen a name (person, company, vessel, aircraft) against all loaded sanctions watchlists at once — OFAC SDN + Consolidated, EU, UK, and UN — alias- and fuzzy-aware. Returns scored potential matches with the source list, sanctioning program, designation date, and the matched alias. Strict mode (default) matches exact-normalized first, then requires every query token as a literal token or token prefix; fuzzy mode (or auto when strict is empty) adds Jaro-Winkler and phonetic matching and labels hits approximate with a raw 0–1 similarity score plus the count of query tokens the candidate covers, which orders candidates that tie on score. Results are paged: totalAvailable and hasMore report matches beyond the returned page, and nextOffset retrieves them. This is a screening AID for a human/compliance review, NOT a compliance determination: a hit means "review this candidate against the official source," and an empty result never means "cleared."',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -152,7 +152,7 @@ export const screenNameTool = tool("sanctions_screen_name", {
       .enum(["strict", "fuzzy"])
       .default("strict")
       .describe(
-        "strict (default): exact-normalized then all-tokens-present. fuzzy: also scored Jaro-Winkler + phonetic. Strict auto-falls-back to fuzzy when it finds nothing.",
+        "strict (default): exact-normalized then all query tokens as literal prefixes/tokens present. fuzzy: also scored Jaro-Winkler + phonetic. Strict auto-falls-back to fuzzy when it finds nothing.",
       ),
     minScore: z
       .number()
@@ -263,11 +263,23 @@ export const screenNameTool = tool("sanctions_screen_name", {
       input.sources && input.sources.length > 0
         ? input.sources
         : [...SOURCE_CODES];
+    const address = input.address
+      ? {
+          ...(input.address.street ? { street: input.address.street } : {}),
+          ...(input.address.houseNumber
+            ? { houseNumber: input.address.houseNumber }
+            : {}),
+          ...(input.address.postalCode
+            ? { postalCode: input.address.postalCode }
+            : {}),
+          ...(input.address.country ? { country: input.address.country } : {}),
+        }
+      : undefined;
     const result = await svc.screenName(
       {
         query: input.name,
         entityType: input.entityType,
-        ...(input.address ? { address: input.address } : {}),
+        ...(address ? { address } : {}),
         matchMode: input.matchMode,
         ...(input.minScore !== undefined ? { minScore: input.minScore } : {}),
         sources,

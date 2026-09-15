@@ -55,6 +55,26 @@ describe("screenName — strict matching", () => {
     expect(hit?.matchType).toBe("strong");
   });
 
+  it("matches incomplete name tokens as strict prefix hits", async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Diam", autoFallback: false, limit: 100 },
+      ctx,
+    );
+
+    expect(res.modeUsed).toBe("strict");
+    expect(res.fuzzyFallbackTriggered).toBe(false);
+    expect(res.hits.length).toBeGreaterThanOrEqual(3);
+    expect(res.hits.some((h) => h.sourceEntryId === "FX-1011")).toBe(true);
+    expect(res.hits.some((h) => h.sourceEntryId === "FX-1012")).toBe(true);
+    expect(res.hits.some((h) => h.sourceEntryId === "FX-1013")).toBe(true);
+    for (const hit of res.hits) {
+      expect(hit.score).toBeUndefined();
+      expect(hit.matchType === "exact" || hit.matchType === "strong").toBe(
+        true,
+      );
+    }
+  });
+
   it("matches on an alias, not just the primary name", async () => {
     const res = await svc.screenName(
       { ...screenDefaults, query: "FTC LLC" },

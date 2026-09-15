@@ -9,22 +9,22 @@
  * @module rest/rest-facade
  */
 
-import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import {
   createServer,
   request as httpRequest,
   type IncomingMessage,
   type Server,
   type ServerResponse,
-} from 'node:http';
-import { createRequire } from 'node:module';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { type ContextLogger, z } from '@cyanheads/mcp-ts-core';
-import { config } from '@cyanheads/mcp-ts-core/config';
-import { logger, requestContextService } from '@cyanheads/mcp-ts-core/utils';
-import { getServerConfig } from '@/config/server-config.js';
+} from "node:http";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { type ContextLogger, z } from "@cyanheads/mcp-ts-core";
+import { config } from "@cyanheads/mcp-ts-core/config";
+import { logger, requestContextService } from "@cyanheads/mcp-ts-core/utils";
+import { getServerConfig } from "@/config/server-config.js";
 import {
   GLEIF_LICENSE,
   GLEIF_SOURCE_LABEL,
@@ -32,19 +32,23 @@ import {
   SCREENING_CAVEAT,
   SOURCE_LICENSES,
   sourceUrls,
-} from '@/mcp-server/tools/definitions/_shared.js';
-import { getScreeningService } from '@/services/screening/screening-service.js';
-import { SOURCE_CODES, SOURCE_LABELS, type SourceCode } from '@/services/screening/types.js';
+} from "@/mcp-server/tools/definitions/_shared.js";
+import { getScreeningService } from "@/services/screening/screening-service.js";
+import {
+  SOURCE_CODES,
+  SOURCE_LABELS,
+  type SourceCode,
+} from "@/services/screening/types.js";
 
 const SOURCE_ENUM = z.enum([
-  'ofac_sdn',
-  'ofac_consolidated',
-  'eu',
-  'uk',
-  'un',
-  'us_bis_entity',
-  'us_bis_dpl',
-  'us_bis_unverified',
+  "ofac_sdn",
+  "ofac_consolidated",
+  "eu",
+  "uk",
+  "un",
+  "us_bis_entity",
+  "us_bis_dpl",
+  "us_bis_unverified",
 ]);
 
 const PartnerIdentifierSchema = z
@@ -53,8 +57,11 @@ const PartnerIdentifierSchema = z
       .string()
       .min(1)
       .optional()
-      .describe('Optional identifier category, such as IMO or Registration.'),
-    value: z.string().min(1).describe('Identifier value as supplied by the business partner source.'),
+      .describe("Optional identifier category, such as IMO or Registration."),
+    value: z
+      .string()
+      .min(1)
+      .describe("Identifier value as supplied by the business partner source."),
   })
   .strict();
 
@@ -64,67 +71,111 @@ const BusinessPartnerScreenRequestSchema = z
       .string()
       .min(1)
       .optional()
-      .describe('Optional external business partner identifier from SAP.'),
-    name: z.string().min(1).optional().describe('Optional business partner name to screen.'),
+      .describe("Optional external business partner identifier from SAP."),
+    name: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Optional business partner name to screen."),
     identifiers: z
       .array(PartnerIdentifierSchema)
       .min(1)
       .optional()
-      .describe('Optional structured identifiers screened in addition to the name.'),
+      .describe(
+        "Optional structured identifiers screened in addition to the name.",
+      ),
     country: z
       .string()
       .length(2)
       .optional()
-      .describe('Optional ISO 3166-1 alpha-2 country code from the source system.'),
+      .describe(
+        "Optional ISO 3166-1 alpha-2 country code from the source system.",
+      ),
     role: z
-      .enum(['customer', 'vendor', 'other'])
+      .enum(["customer", "vendor", "other"])
       .optional()
-      .describe('Optional business role from the source system.'),
+      .describe("Optional business role from the source system."),
     entityType: z
-      .enum(['any', 'person', 'organization', 'vessel', 'aircraft'])
-      .default('any')
-      .describe('Entity-type restriction forwarded to the screening engine.'),
+      .enum(["any", "person", "organization", "vessel", "aircraft"])
+      .default("any")
+      .describe("Entity-type restriction forwarded to the screening engine."),
     matchMode: z
-      .enum(['strict', 'fuzzy'])
-      .default('strict')
-      .describe('Matching mode: strict first, fuzzy optional/fallback.'),
+      .enum(["strict", "fuzzy"])
+      .default("strict")
+      .describe(
+        "Matching mode: strict exact/prefix-token search first, fuzzy optional/fallback.",
+      ),
     minScore: z
       .number()
       .min(0)
       .max(1)
       .optional()
-      .describe('Optional fuzzy similarity floor (0-1).'),
+      .describe("Optional fuzzy similarity floor (0-1)."),
     sources: z
       .array(SOURCE_ENUM)
       .optional()
-      .describe('Optional source-list subset. Omit to screen across all lists.'),
-    limit: z.number().int().min(1).max(100).default(25).describe('Maximum hits to return.'),
-    offset: z.number().int().min(0).default(0).describe('Zero-based pagination offset.'),
+      .describe(
+        "Optional source-list subset. Omit to screen across all lists.",
+      ),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .default(25)
+      .describe("Maximum hits to return."),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .default(0)
+      .describe("Zero-based pagination offset."),
   })
   .strict()
-  .refine((value) => Boolean(value.name) || Boolean(value.identifiers?.length), {
-    message: 'At least one of name or identifiers is required.',
-    path: ['name'],
-  });
+  .refine(
+    (value) => Boolean(value.name) || Boolean(value.identifiers?.length),
+    {
+      message: "At least one of name or identifiers is required.",
+      path: ["name"],
+    },
+  );
 
 const IdentifierScreenRequestSchema = z
   .object({
-    identifier: z.string().min(1).describe('Published identifier value, such as an IMO number.'),
+    identifier: z
+      .string()
+      .min(1)
+      .describe("Published identifier value, such as an IMO number."),
     identifierType: z
       .string()
       .min(1)
       .optional()
-      .describe('Optional published identifier category filter, such as IMO or Passport.'),
+      .describe(
+        "Optional published identifier category filter, such as IMO or Passport.",
+      ),
     entityType: z
-      .enum(['any', 'person', 'organization', 'vessel', 'aircraft'])
-      .default('any')
-      .describe('Restrict the search to one entity class.'),
+      .enum(["any", "person", "organization", "vessel", "aircraft"])
+      .default("any")
+      .describe("Restrict the search to one entity class."),
     sources: z
       .array(SOURCE_ENUM)
       .optional()
-      .describe('Optional source-list subset. Omit to search all loaded lists.'),
-    limit: z.number().int().min(1).max(100).default(25).describe('Maximum hits to return.'),
-    offset: z.number().int().min(0).default(0).describe('Zero-based pagination offset.'),
+      .describe(
+        "Optional source-list subset. Omit to search all loaded lists.",
+      ),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .default(25)
+      .describe("Maximum hits to return."),
+    offset: z
+      .number()
+      .int()
+      .min(0)
+      .default(0)
+      .describe("Zero-based pagination offset."),
   })
   .strict();
 
@@ -137,15 +188,17 @@ const BatchScreenRequestSchema = z
             bpId: z.string().min(1).optional(),
             name: z.string().min(1),
             country: z.string().length(2).optional(),
-            role: z.enum(['customer', 'vendor', 'other']).optional(),
+            role: z.enum(["customer", "vendor", "other"]).optional(),
           })
           .strict(),
       )
       .min(1),
     screening: z
       .object({
-        entityType: z.enum(['any', 'person', 'organization', 'vessel', 'aircraft']).default('any'),
-        matchMode: z.enum(['strict', 'fuzzy']).default('strict'),
+        entityType: z
+          .enum(["any", "person", "organization", "vessel", "aircraft"])
+          .default("any"),
+        matchMode: z.enum(["strict", "fuzzy"]).default("strict"),
         minScore: z.number().min(0).max(1).optional(),
         sources: z.array(SOURCE_ENUM).optional(),
         limit: z.number().int().min(1).max(100).default(25),
@@ -156,8 +209,10 @@ const BatchScreenRequestSchema = z
 
 const SapIntegrationScreeningSchema = z
   .object({
-    entityType: z.enum(['any', 'person', 'organization', 'vessel', 'aircraft']).default('any'),
-    matchMode: z.enum(['strict', 'fuzzy']).default('strict'),
+    entityType: z
+      .enum(["any", "person", "organization", "vessel", "aircraft"])
+      .default("any"),
+    matchMode: z.enum(["strict", "fuzzy"]).default("strict"),
     minScore: z.number().min(0).max(1).optional(),
     sources: z.array(SOURCE_ENUM).optional(),
     limit: z.number().int().min(1).max(100).default(25),
@@ -169,16 +224,16 @@ const SapBusinessPartnerSchema = z
     bpId: z.string().min(1),
     name: z.string().min(1),
     country: z.string().length(2).optional(),
-    role: z.enum(['customer', 'vendor', 'other']).optional(),
+    role: z.enum(["customer", "vendor", "other"]).optional(),
   })
   .strict();
 
 const SapEccBusinessPartnerChangedRequestSchema = z
   .object({
-    sourceSystem: z.literal('ecc'),
+    sourceSystem: z.literal("ecc"),
     triggerType: z
-      .enum(['badi', 'change_document', 'manual'])
-      .describe('ECC trigger category for traceability.'),
+      .enum(["badi", "change_document", "manual"])
+      .describe("ECC trigger category for traceability."),
     businessPartner: SapBusinessPartnerSchema,
     screening: SapIntegrationScreeningSchema,
     context: z
@@ -192,8 +247,11 @@ const SapEccBusinessPartnerChangedRequestSchema = z
 
 const SapS4BusinessPartnerChangedRequestSchema = z
   .object({
-    sourceSystem: z.literal('s4hana'),
-    eventType: z.string().min(1).describe('S/4HANA business event type from Event Mesh.'),
+    sourceSystem: z.literal("s4hana"),
+    eventType: z
+      .string()
+      .min(1)
+      .describe("S/4HANA business event type from Event Mesh."),
     eventId: z.string().min(1).optional(),
     businessPartner: SapBusinessPartnerSchema,
     screening: SapIntegrationScreeningSchema,
@@ -207,7 +265,7 @@ const SapS4BusinessPartnerChangedRequestSchema = z
 
 const SapBatchBusinessPartnersRequestSchema = z
   .object({
-    sourceSystem: z.enum(['ecc', 's4hana']),
+    sourceSystem: z.enum(["ecc", "s4hana"]),
     triggeredBy: z.string().min(1).optional(),
     runId: z.string().min(1).optional(),
     items: z.array(SapBusinessPartnerSchema).min(1),
@@ -226,7 +284,7 @@ const CreateExceptionRequestSchema = z
 
 const CaseDecisionRequestSchema = z
   .object({
-    decision: z.enum(['confirmed_match', 'false_positive', 'escalate']),
+    decision: z.enum(["confirmed_match", "false_positive", "escalate"]),
     decidedBy: z.string().min(1),
     proposedBy: z.string().min(1).optional(),
     approvedBy: z.string().min(1).optional(),
@@ -234,21 +292,25 @@ const CaseDecisionRequestSchema = z
   })
   .strict();
 
-type BusinessPartnerScreenRequest = z.infer<typeof BusinessPartnerScreenRequestSchema>;
-type NamedBusinessPartnerScreenRequest = BusinessPartnerScreenRequest & { name: string };
+type BusinessPartnerScreenRequest = z.infer<
+  typeof BusinessPartnerScreenRequestSchema
+>;
+type NamedBusinessPartnerScreenRequest = BusinessPartnerScreenRequest & {
+  name: string;
+};
 
 type ScreeningResponseBody = {
   businessPartner: {
     bpId?: string;
     name: string;
     country?: string;
-    role?: 'customer' | 'vendor' | 'other';
+    role?: "customer" | "vendor" | "other";
   };
   screening: {
     normalizedQuery: string;
-    requestedMatchMode: 'strict' | 'fuzzy';
-    matchModeUsed: 'strict' | 'fuzzy';
-    entityType: 'any' | 'person' | 'organization' | 'vessel' | 'aircraft';
+    requestedMatchMode: "strict" | "fuzzy";
+    matchModeUsed: "strict" | "fuzzy";
+    entityType: "any" | "person" | "organization" | "vessel" | "aircraft";
     minScore?: number;
     sources: Array<z.infer<typeof SOURCE_ENUM>>;
     sourcesAsOf?: string;
@@ -288,14 +350,14 @@ type StoredScreeningEvent = {
   eventId: string;
   bpId: string;
   queryName: string;
-  matchMode: 'strict' | 'fuzzy';
-  matchModeUsed: 'strict' | 'fuzzy';
-  entityType: 'any' | 'person' | 'organization' | 'vessel' | 'aircraft';
+  matchMode: "strict" | "fuzzy";
+  matchModeUsed: "strict" | "fuzzy";
+  entityType: "any" | "person" | "organization" | "vessel" | "aircraft";
   sourcesQueried: string[];
   sourcesAsOf?: string;
   executedAt: string;
   hitCount: number;
-  screeningStatus: 'screened' | 'not_ready' | 'error';
+  screeningStatus: "screened" | "not_ready" | "error";
 };
 
 type StoredException = {
@@ -304,7 +366,7 @@ type StoredException = {
   justification: string;
   validFrom?: string;
   validUntil?: string;
-  status: 'active';
+  status: "active";
   createdAt: string;
 };
 
@@ -313,20 +375,20 @@ type StoredCaseHit = {
   source: string;
   sourceEntryId: string;
   matchedName: string;
-  matchType: 'exact' | 'strong' | 'approximate';
+  matchType: "exact" | "strong" | "approximate";
   score?: number;
-  reviewStatus: 'open' | 'confirmed_match' | 'false_positive' | 'escalated';
+  reviewStatus: "open" | "confirmed_match" | "false_positive" | "escalated";
 };
 
 type StoredCaseDecision = {
   decisionId: string;
-  decision: 'confirmed_match' | 'false_positive' | 'escalate';
+  decision: "confirmed_match" | "false_positive" | "escalate";
   decidedBy: string;
   proposedBy: string;
   approvedBy?: string;
   comment?: string;
   requiresFourEyes: boolean;
-  approvalStatus: 'not_required' | 'pending' | 'approved';
+  approvalStatus: "not_required" | "pending" | "approved";
   decidedAt: string;
 };
 
@@ -334,8 +396,8 @@ type StoredComplianceCase = {
   caseId: string;
   bpId: string;
   businessPartnerName: string;
-  status: 'open' | 'in_review' | 'pending_approval' | 'closed';
-  priority: 'low' | 'medium' | 'high';
+  status: "open" | "in_review" | "pending_approval" | "closed";
+  priority: "low" | "medium" | "high";
   createdAt: string;
   updatedAt: string;
   latestEventId: string;
@@ -346,7 +408,7 @@ type StoredComplianceCase = {
 
 let restServer: Server | undefined;
 const DEFAULT_REST_TIMEOUT_MS = 30_000;
-const IDEMPOTENCY_KEY_HEADER = 'Idempotency-Key';
+const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
 const historyByBpId = new Map<string, StoredScreeningEvent[]>();
 const exceptionsByBpId = new Map<string, StoredException[]>();
 const complianceCasesById = new Map<string, StoredComplianceCase>();
@@ -370,14 +432,22 @@ void matchComplianceCaseDecisionPath;
 void renderComplianceCasesUiHtml;
 
 const OPENAPI_SPEC_PATHS = [
-  resolve(process.cwd(), 'docs', 'rest-facade-openapi.yaml'),
-  join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'docs', 'rest-facade-openapi.yaml'),
+  resolve(process.cwd(), "docs", "rest-facade-openapi.yaml"),
+  join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "docs",
+    "rest-facade-openapi.yaml",
+  ),
 ];
-const SWAGGER_UI_DIST_PATH = createRequire(import.meta.url)('swagger-ui-dist').getAbsoluteFSPath();
+const SWAGGER_UI_DIST_PATH = createRequire(import.meta.url)(
+  "swagger-ui-dist",
+).getAbsoluteFSPath();
 
 /** Start the REST facade when running on HTTP transport. Idempotent per process. */
 export async function startRestFacade(): Promise<void> {
-  if (config.mcpTransportType !== 'http') return;
+  if (config.mcpTransportType !== "http") return;
   if (restServer) return;
 
   const serverConfig = getServerConfig();
@@ -398,9 +468,9 @@ export async function startRestFacade(): Promise<void> {
   });
 
   await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
+    server.once("error", reject);
     server.listen(restPort, config.mcpHttpHost, () => {
-      server.off('error', reject);
+      server.off("error", reject);
       resolve();
     });
   });
@@ -409,7 +479,7 @@ export async function startRestFacade(): Promise<void> {
   logger.info(
     `REST facade listening on http://${config.mcpHttpHost}:${restPort}/api/v1 (MCP remains on ${config.mcpHttpEndpointPath}).`,
     requestContextService.createRequestContext({
-      operation: 'rest.facade.start',
+      operation: "rest.facade.start",
     }),
   );
 }
@@ -435,80 +505,100 @@ export async function stopRestFacade(): Promise<void> {
   clearRestState();
 }
 
-async function routeRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function routeRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
   const requestId = readRequestId(req);
-  const reqLog = createRequestLogger('rest.facade.request', requestId);
+  const reqLog = createRequestLogger("rest.facade.request", requestId);
 
   try {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+    const url = new URL(
+      req.url ?? "/",
+      `http://${req.headers.host ?? "localhost"}`,
+    );
 
-    if (url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
+    if (url.pathname === "/mcp" || url.pathname.startsWith("/mcp/")) {
       await proxyMcpRequest(req, res, url);
       return;
     }
 
-    if (req.method === 'OPTIONS') {
+    if (req.method === "OPTIONS") {
       writeNoContent(res);
       return;
     }
 
-    if (req.method === 'GET' && url.pathname === '/api/v1/sources') {
+    if (req.method === "GET" && url.pathname === "/api/v1/sources") {
       await handleListSources(res);
       return;
     }
 
     const designationMatch = matchDesignationPath(url.pathname);
-    if (req.method === 'GET' && designationMatch) {
-      await handleGetDesignation(designationMatch.source, designationMatch.entryId, res);
-      return;
-    }
-
-    if (req.method === 'GET' && url.pathname === '/api/v1/openapi.yaml') {
-      await handleOpenApiYaml(res);
-      return;
-    }
-
-    if (req.method === 'GET' && url.pathname === '/ui/swagger') {
-      writeHtml(res, 200, renderSwaggerUiHtml());
-      return;
-    }
-
-    if (req.method === 'GET' && url.pathname === '/ui/swagger-ui.css') {
-      await handleSwaggerAsset('swagger-ui.css', 'text/css; charset=utf-8', res);
-      return;
-    }
-
-    if (req.method === 'GET' && url.pathname === '/ui/swagger-ui-bundle.js') {
-      await handleSwaggerAsset(
-        'swagger-ui-bundle.js',
-        'application/javascript; charset=utf-8',
+    if (req.method === "GET" && designationMatch) {
+      await handleGetDesignation(
+        designationMatch.source,
+        designationMatch.entryId,
         res,
       );
       return;
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/v1/screening/business-partner') {
+    if (req.method === "GET" && url.pathname === "/api/v1/openapi.yaml") {
+      await handleOpenApiYaml(res);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/ui/swagger") {
+      writeHtml(res, 200, renderSwaggerUiHtml());
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/ui/swagger-ui.css") {
+      await handleSwaggerAsset(
+        "swagger-ui.css",
+        "text/css; charset=utf-8",
+        res,
+      );
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/ui/swagger-ui-bundle.js") {
+      await handleSwaggerAsset(
+        "swagger-ui-bundle.js",
+        "application/javascript; charset=utf-8",
+        res,
+      );
+      return;
+    }
+
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/v1/screening/business-partner"
+    ) {
       await handleBusinessPartnerScreen(req, res, reqLog);
       return;
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/v1/screening/identifier') {
+    if (
+      req.method === "POST" &&
+      url.pathname === "/api/v1/screening/identifier"
+    ) {
       await handleIdentifierScreen(req, res);
       return;
     }
 
     writeJson(res, 404, {
       error: {
-        code: 'not_found',
-        message: `No REST route for ${req.method ?? 'UNKNOWN'} ${url.pathname}.`,
+        code: "not_found",
+        message: `No REST route for ${req.method ?? "UNKNOWN"} ${url.pathname}.`,
       },
     });
   } catch (error) {
-    reqLog.error('REST facade request failed', toError(error));
+    reqLog.error("REST facade request failed", toError(error));
     writeJson(res, 500, {
       error: {
-        code: 'internal_error',
-        message: 'Unexpected REST facade error.',
+        code: "internal_error",
+        message: "Unexpected REST facade error.",
       },
     });
   }
@@ -541,7 +631,7 @@ async function handleListSources(res: ServerResponse): Promise<void> {
   });
 
   sources.push({
-    code: 'gleif',
+    code: "gleif",
     label: GLEIF_SOURCE_LABEL,
     recordCount: lei.entityCount,
     url: gleifSourceUrl(),
@@ -560,16 +650,17 @@ async function handleListSources(res: ServerResponse): Promise<void> {
 async function handleOpenApiYaml(res: ServerResponse): Promise<void> {
   for (const specPath of OPENAPI_SPEC_PATHS) {
     try {
-      const spec = await readFile(specPath, 'utf8');
-      writeText(res, 200, spec, 'application/yaml; charset=utf-8');
+      const spec = await readFile(specPath, "utf8");
+      writeText(res, 200, spec, "application/yaml; charset=utf-8");
       return;
-    } catch { }
+    } catch {}
   }
 
   writeJson(res, 500, {
     error: {
-      code: 'openapi_unavailable',
-      message: 'OpenAPI specification file is not available at docs/rest-facade-openapi.yaml.',
+      code: "openapi_unavailable",
+      message:
+        "OpenAPI specification file is not available at docs/rest-facade-openapi.yaml.",
     },
   });
 }
@@ -589,21 +680,24 @@ async function proxyMcpRequest(
       headers: {
         ...req.headers,
         host: `${serverConfig.restMcpProxyHost}:${config.mcpHttpPort}`,
-        'x-forwarded-host': req.headers.host ?? '',
+        "x-forwarded-host": req.headers.host ?? "",
       },
     },
     (upstreamResponse) => {
-      res.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+      res.writeHead(
+        upstreamResponse.statusCode ?? 502,
+        upstreamResponse.headers,
+      );
       upstreamResponse.pipe(res);
     },
   );
 
-  upstream.on('error', () => {
+  upstream.on("error", () => {
     if (!res.headersSent) {
       writeJson(res, 502, {
         error: {
-          code: 'mcp_upstream_unavailable',
-          message: 'The internal MCP listener is unavailable.',
+          code: "mcp_upstream_unavailable",
+          message: "The internal MCP listener is unavailable.",
         },
       });
       return;
@@ -621,11 +715,11 @@ async function handleSwaggerAsset(
 ): Promise<void> {
   try {
     const asset = await readFile(join(SWAGGER_UI_DIST_PATH, fileName));
-    writeText(res, 200, asset.toString('utf8'), contentType);
+    writeText(res, 200, asset.toString("utf8"), contentType);
   } catch {
     writeJson(res, 500, {
       error: {
-        code: 'swagger_ui_unavailable',
+        code: "swagger_ui_unavailable",
         message: `Swagger UI asset ${fileName} is not available.`,
       },
     });
@@ -642,10 +736,10 @@ async function handleGetDesignation(
   if (!sanctions.ready) {
     writeJson(res, 503, {
       error: {
-        code: 'mirror_not_ready',
-        message: 'The local sanctions mirror is not yet populated.',
+        code: "mirror_not_ready",
+        message: "The local sanctions mirror is not yet populated.",
         recovery:
-          'Run the mirror:init lifecycle script to load the sanctions lists, then retry; check /api/v1/sources for readiness.',
+          "Run the mirror:init lifecycle script to load the sanctions lists, then retry; check /api/v1/sources for readiness.",
       },
     });
     return;
@@ -655,7 +749,7 @@ async function handleGetDesignation(
   if (!designation) {
     writeJson(res, 404, {
       error: {
-        code: 'designation_not_found',
+        code: "designation_not_found",
         message: `No ${source} designation with entry ID "${entryId}".`,
       },
     });
@@ -671,7 +765,9 @@ async function handleGetDesignation(
       primaryName: designation.primaryName,
       ...(designation.program ? { program: designation.program } : {}),
       ...(designation.legalBasis ? { legalBasis: designation.legalBasis } : {}),
-      ...(designation.designationDate ? { designationDate: designation.designationDate } : {}),
+      ...(designation.designationDate
+        ? { designationDate: designation.designationDate }
+        : {}),
       aliases: designation.payload.aliases,
       identifiers: designation.payload.identifiers,
       addresses: designation.payload.addresses,
@@ -680,7 +776,9 @@ async function handleGetDesignation(
       ...(designation.payload.vesselDetails
         ? { vesselDetails: designation.payload.vesselDetails }
         : {}),
-      ...(designation.payload.remarks ? { remarks: designation.payload.remarks } : {}),
+      ...(designation.payload.remarks
+        ? { remarks: designation.payload.remarks }
+        : {}),
       caveat: SCREENING_CAVEAT,
     },
   });
@@ -698,8 +796,8 @@ async function handleBusinessPartnerScreen(
   if (!parsed.success) {
     writeJson(res, 400, {
       error: {
-        code: 'validation_error',
-        message: 'Invalid request payload for business-partner screening.',
+        code: "validation_error",
+        message: "Invalid request payload for business-partner screening.",
         details: parsed.error.flatten(),
       },
     });
@@ -710,34 +808,39 @@ async function handleBusinessPartnerScreen(
   const response = input.name
     ? await executeScreening(input as typeof input & { name: string }, reqLog)
     : {
-      body: {
-        businessPartner: {
-          ...(input.bpId ? { bpId: input.bpId } : {}),
-          name: '',
-          ...(input.country ? { country: input.country } : {}),
-          ...(input.role ? { role: input.role } : {}),
+        body: {
+          businessPartner: {
+            ...(input.bpId ? { bpId: input.bpId } : {}),
+            name: "",
+            ...(input.country ? { country: input.country } : {}),
+            ...(input.role ? { role: input.role } : {}),
+          },
+          screening: {
+            normalizedQuery: "",
+            requestedMatchMode: input.matchMode,
+            matchModeUsed: "strict" as const,
+            entityType: input.entityType,
+            ...(input.minScore !== undefined
+              ? { minScore: input.minScore }
+              : {}),
+            sources:
+              input.sources && input.sources.length > 0
+                ? input.sources
+                : [...SOURCE_CODES],
+          },
+          pagination: {
+            limit: input.limit,
+            offset: input.offset,
+            returned: 0,
+            totalAvailable: 0,
+            totalAvailableBasis: "exact",
+            hasMore: false,
+          },
+          hits: [],
+          caveat: SCREENING_CAVEAT,
         },
-        screening: {
-          normalizedQuery: '',
-          requestedMatchMode: input.matchMode,
-          matchModeUsed: 'strict' as const,
-          entityType: input.entityType,
-          ...(input.minScore !== undefined ? { minScore: input.minScore } : {}),
-          sources: input.sources && input.sources.length > 0 ? input.sources : [...SOURCE_CODES],
-        },
-        pagination: {
-          limit: input.limit,
-          offset: input.offset,
-          returned: 0,
-          totalAvailable: 0,
-          totalAvailableBasis: 'exact',
-          hasMore: false,
-        },
-        hits: [],
-        caveat: SCREENING_CAVEAT,
-      },
-    };
-  if ('error' in response) {
+      };
+  if ("error" in response) {
     writeJson(res, response.status, {
       error: response.error,
     });
@@ -750,7 +853,10 @@ async function handleBusinessPartnerScreen(
   }
 
   const svc = getScreeningService();
-  const sources = input.sources && input.sources.length > 0 ? input.sources : [...SOURCE_CODES];
+  const sources =
+    input.sources && input.sources.length > 0
+      ? input.sources
+      : [...SOURCE_CODES];
   const identifierResults = await Promise.all(
     input.identifiers.map((identifier) =>
       svc.searchIdentifier({
@@ -766,7 +872,10 @@ async function handleBusinessPartnerScreen(
   const identifierHits = await Promise.all(
     identifierResults.flatMap((result) =>
       result.hits.map(async (hit) => {
-        const designation = await svc.getDesignation(hit.source, hit.sourceEntryId);
+        const designation = await svc.getDesignation(
+          hit.source,
+          hit.sourceEntryId,
+        );
         return {
           source: hit.source,
           sourceLabel: SOURCE_LABELS[hit.source],
@@ -774,15 +883,20 @@ async function handleBusinessPartnerScreen(
           entityType: hit.entityType,
           primaryName: hit.primaryName,
           matchedName: hit.primaryName,
-          matchedNameType: 'primary',
-          matchType: 'exact' as const,
+          matchedNameType: "primary",
+          matchType: "exact" as const,
           identifier: hit.identifier,
           identifierMatchType: hit.matchType,
-          matchEvidence: [`identifier_${hit.matchType}`, `identifier_type_${hit.identifier.type}`],
+          matchEvidence: [
+            `identifier_${hit.matchType}`,
+            `identifier_type_${hit.identifier.type}`,
+          ],
           aliases: designation?.payload.aliases ?? [],
           identifiers: designation?.payload.identifiers ?? [],
           ...(hit.program ? { program: hit.program } : {}),
-          ...(hit.designationDate ? { designationDate: hit.designationDate } : {}),
+          ...(hit.designationDate
+            ? { designationDate: hit.designationDate }
+            : {}),
         };
       }),
     ),
@@ -799,7 +913,9 @@ async function handleBusinessPartnerScreen(
     const key = `${hit.source}|${hit.sourceEntryId}`;
     const existing = mergedHits.get(key);
     if (existing) {
-      const evidence = Array.isArray(existing.matchEvidence) ? existing.matchEvidence : [];
+      const evidence = Array.isArray(existing.matchEvidence)
+        ? existing.matchEvidence
+        : [];
       mergedHits.set(key, {
         ...existing,
         identifier: hit.identifier,
@@ -824,7 +940,10 @@ async function handleBusinessPartnerScreen(
   });
 }
 
-async function handleIdentifierScreen(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handleIdentifierScreen(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
   const payload = await readJsonBodyForRoute(req, res);
   if (payload === undefined) return;
 
@@ -832,8 +951,8 @@ async function handleIdentifierScreen(req: IncomingMessage, res: ServerResponse)
   if (!parsed.success) {
     writeJson(res, 400, {
       error: {
-        code: 'validation_error',
-        message: 'Invalid request payload for identifier screening.',
+        code: "validation_error",
+        message: "Invalid request payload for identifier screening.",
         details: parsed.error.flatten(),
       },
     });
@@ -846,16 +965,19 @@ async function handleIdentifierScreen(req: IncomingMessage, res: ServerResponse)
   if (!sanctions.ready) {
     writeJson(res, 503, {
       error: {
-        code: 'mirror_not_ready',
-        message: 'The local sanctions mirror is not yet populated.',
+        code: "mirror_not_ready",
+        message: "The local sanctions mirror is not yet populated.",
         recovery:
-          'Run the mirror:init lifecycle script to load the sanctions lists, then retry; check /api/v1/sources for readiness.',
+          "Run the mirror:init lifecycle script to load the sanctions lists, then retry; check /api/v1/sources for readiness.",
       },
     });
     return;
   }
 
-  const sources = input.sources && input.sources.length > 0 ? input.sources : [...SOURCE_CODES];
+  const sources =
+    input.sources && input.sources.length > 0
+      ? input.sources
+      : [...SOURCE_CODES];
   const result = await svc.searchIdentifier({
     query: input.identifier,
     ...(input.identifierType ? { identifierType: input.identifierType } : {}),
@@ -879,7 +1001,10 @@ async function handleIdentifierScreen(req: IncomingMessage, res: ServerResponse)
     },
     hits: await Promise.all(
       result.hits.map(async (hit) => {
-        const designation = await svc.getDesignation(hit.source, hit.sourceEntryId);
+        const designation = await svc.getDesignation(
+          hit.source,
+          hit.sourceEntryId,
+        );
         return {
           source: hit.source,
           sourceLabel: SOURCE_LABELS[hit.source],
@@ -891,14 +1016,16 @@ async function handleIdentifierScreen(req: IncomingMessage, res: ServerResponse)
           aliases: designation?.payload.aliases ?? [],
           identifiers: designation?.payload.identifiers ?? [],
           ...(hit.program ? { program: hit.program } : {}),
-          ...(hit.designationDate ? { designationDate: hit.designationDate } : {}),
+          ...(hit.designationDate
+            ? { designationDate: hit.designationDate }
+            : {}),
         };
       }),
     ),
     ...(result.totalAvailable === 0
       ? {
-        notice: `No published identifier matched "${input.identifier}" across the selected lists. This is NOT a clearance.`,
-      }
+          notice: `No published identifier matched "${input.identifier}" across the selected lists. This is NOT a clearance.`,
+        }
       : {}),
     caveat: SCREENING_CAVEAT,
   };
@@ -906,9 +1033,13 @@ async function handleIdentifierScreen(req: IncomingMessage, res: ServerResponse)
   writeJson(res, 200, body);
 }
 
-function handleBusinessPartnerHistory(bpId: string, url: URL, res: ServerResponse): void {
-  const limit = parsePositiveInt(url.searchParams.get('limit'), 25, 100);
-  const offset = parsePositiveInt(url.searchParams.get('offset'), 0, 1_000_000);
+function handleBusinessPartnerHistory(
+  bpId: string,
+  url: URL,
+  res: ServerResponse,
+): void {
+  const limit = parsePositiveInt(url.searchParams.get("limit"), 25, 100);
+  const offset = parsePositiveInt(url.searchParams.get("offset"), 0, 1_000_000);
 
   const events = historyByBpId.get(bpId) ?? [];
   const page = events.slice(offset, offset + limit);
@@ -920,7 +1051,9 @@ function handleBusinessPartnerHistory(bpId: string, url: URL, res: ServerRespons
       returned: page.length,
       totalAvailable: events.length,
       hasMore: offset + page.length < events.length,
-      ...(offset + page.length < events.length ? { nextOffset: offset + page.length } : {}),
+      ...(offset + page.length < events.length
+        ? { nextOffset: offset + page.length }
+        : {}),
     },
     events: page,
   });
@@ -938,8 +1071,8 @@ async function handleScreeningBatch(
   if (!parsed.success) {
     writeJson(res, 400, {
       error: {
-        code: 'validation_error',
-        message: 'Invalid request payload for screening batch.',
+        code: "validation_error",
+        message: "Invalid request payload for screening batch.",
         details: parsed.error.flatten(),
       },
     });
@@ -959,33 +1092,38 @@ async function handleScreeningBatch(
         name: item.name,
         ...(item.country ? { country: item.country } : {}),
         ...(item.role ? { role: item.role } : {}),
-        entityType: input.screening?.entityType ?? 'any',
-        matchMode: input.screening?.matchMode ?? 'strict',
-        ...(input.screening?.minScore !== undefined ? { minScore: input.screening.minScore } : {}),
-        ...(input.screening?.sources ? { sources: input.screening.sources } : {}),
+        entityType: input.screening?.entityType ?? "any",
+        matchMode: input.screening?.matchMode ?? "strict",
+        ...(input.screening?.minScore !== undefined
+          ? { minScore: input.screening.minScore }
+          : {}),
+        ...(input.screening?.sources
+          ? { sources: input.screening.sources }
+          : {}),
         limit: input.screening?.limit ?? 25,
         offset: 0,
       },
       reqLog,
     );
 
-    if ('error' in response) {
+    if ("error" in response) {
       failedCount += 1;
       if (item.bpId) {
         appendHistoryEvent({
           eventId: randomUUID(),
           bpId: item.bpId,
           queryName: item.name,
-          matchMode: input.screening?.matchMode ?? 'strict',
-          matchModeUsed: input.screening?.matchMode ?? 'strict',
-          entityType: input.screening?.entityType ?? 'any',
+          matchMode: input.screening?.matchMode ?? "strict",
+          matchModeUsed: input.screening?.matchMode ?? "strict",
+          entityType: input.screening?.entityType ?? "any",
           sourcesQueried:
             input.screening?.sources && input.screening.sources.length > 0
               ? input.screening.sources
               : [...SOURCE_CODES],
           executedAt: new Date().toISOString(),
           hitCount: 0,
-          screeningStatus: response.error.code === 'mirror_not_ready' ? 'not_ready' : 'error',
+          screeningStatus:
+            response.error.code === "mirror_not_ready" ? "not_ready" : "error",
         });
       }
       continue;
@@ -998,10 +1136,14 @@ async function handleScreeningBatch(
         name: item.name,
         ...(item.country ? { country: item.country } : {}),
         ...(item.role ? { role: item.role } : {}),
-        entityType: input.screening?.entityType ?? 'any',
-        matchMode: input.screening?.matchMode ?? 'strict',
-        ...(input.screening?.minScore !== undefined ? { minScore: input.screening.minScore } : {}),
-        ...(input.screening?.sources ? { sources: input.screening.sources } : {}),
+        entityType: input.screening?.entityType ?? "any",
+        matchMode: input.screening?.matchMode ?? "strict",
+        ...(input.screening?.minScore !== undefined
+          ? { minScore: input.screening.minScore }
+          : {}),
+        ...(input.screening?.sources
+          ? { sources: input.screening.sources }
+          : {}),
         limit: input.screening?.limit ?? 25,
         offset: 0,
       },
@@ -1011,12 +1153,12 @@ async function handleScreeningBatch(
 
   writeJson(res, 202, {
     batchId,
-    status: 'accepted',
+    status: "accepted",
     acceptedAt,
     acceptedCount: input.items.length,
     processedCount,
     failedCount,
-    note: 'Batch endpoint currently processes immediately in-process and records per-BP history events.',
+    note: "Batch endpoint currently processes immediately in-process and records per-BP history events.",
     caveat: SCREENING_CAVEAT,
   });
 }
@@ -1033,8 +1175,8 @@ async function handleSapEccBusinessPartnerChanged(
   if (!parsed.success) {
     writeJson(res, 400, {
       error: {
-        code: 'validation_error',
-        message: 'Invalid ECC business-partner change payload.',
+        code: "validation_error",
+        message: "Invalid ECC business-partner change payload.",
         details: parsed.error.flatten(),
       },
     });
@@ -1045,18 +1187,22 @@ async function handleSapEccBusinessPartnerChanged(
   const screeningInput: NamedBusinessPartnerScreenRequest = {
     bpId: body.businessPartner.bpId,
     name: body.businessPartner.name,
-    ...(body.businessPartner.country ? { country: body.businessPartner.country } : {}),
+    ...(body.businessPartner.country
+      ? { country: body.businessPartner.country }
+      : {}),
     ...(body.businessPartner.role ? { role: body.businessPartner.role } : {}),
-    entityType: body.screening?.entityType ?? 'any',
-    matchMode: body.screening?.matchMode ?? 'strict',
-    ...(body.screening?.minScore !== undefined ? { minScore: body.screening.minScore } : {}),
+    entityType: body.screening?.entityType ?? "any",
+    matchMode: body.screening?.matchMode ?? "strict",
+    ...(body.screening?.minScore !== undefined
+      ? { minScore: body.screening.minScore }
+      : {}),
     ...(body.screening?.sources ? { sources: body.screening.sources } : {}),
     limit: body.screening?.limit ?? 25,
     offset: 0,
   };
 
   const response = await executeScreening(screeningInput, reqLog);
-  if ('error' in response) {
+  if ("error" in response) {
     writeJson(res, response.status, {
       error: response.error,
     });
@@ -1067,9 +1213,9 @@ async function handleSapEccBusinessPartnerChanged(
 
   writeJson(res, 200, {
     integration: {
-      sourceSystem: 'ecc',
+      sourceSystem: "ecc",
       triggerType: body.triggerType,
-      mode: 'realtime',
+      mode: "realtime",
       receivedAt: new Date().toISOString(),
       ...(body.context ? { context: body.context } : {}),
     },
@@ -1089,8 +1235,8 @@ async function handleSapS4BusinessPartnerChanged(
   if (!parsed.success) {
     writeJson(res, 400, {
       error: {
-        code: 'validation_error',
-        message: 'Invalid S/4 business-partner event payload.',
+        code: "validation_error",
+        message: "Invalid S/4 business-partner event payload.",
         details: parsed.error.flatten(),
       },
     });
@@ -1101,18 +1247,22 @@ async function handleSapS4BusinessPartnerChanged(
   const screeningInput: NamedBusinessPartnerScreenRequest = {
     bpId: body.businessPartner.bpId,
     name: body.businessPartner.name,
-    ...(body.businessPartner.country ? { country: body.businessPartner.country } : {}),
+    ...(body.businessPartner.country
+      ? { country: body.businessPartner.country }
+      : {}),
     ...(body.businessPartner.role ? { role: body.businessPartner.role } : {}),
-    entityType: body.screening?.entityType ?? 'any',
-    matchMode: body.screening?.matchMode ?? 'strict',
-    ...(body.screening?.minScore !== undefined ? { minScore: body.screening.minScore } : {}),
+    entityType: body.screening?.entityType ?? "any",
+    matchMode: body.screening?.matchMode ?? "strict",
+    ...(body.screening?.minScore !== undefined
+      ? { minScore: body.screening.minScore }
+      : {}),
     ...(body.screening?.sources ? { sources: body.screening.sources } : {}),
     limit: body.screening?.limit ?? 25,
     offset: 0,
   };
 
   const response = await executeScreening(screeningInput, reqLog);
-  if ('error' in response) {
+  if ("error" in response) {
     writeJson(res, response.status, {
       error: response.error,
     });
@@ -1123,10 +1273,10 @@ async function handleSapS4BusinessPartnerChanged(
 
   writeJson(res, 200, {
     integration: {
-      sourceSystem: 's4hana',
+      sourceSystem: "s4hana",
       eventType: body.eventType,
       ...(body.eventId ? { eventId: body.eventId } : {}),
-      mode: 'realtime',
+      mode: "realtime",
       receivedAt: new Date().toISOString(),
       ...(body.context ? { context: body.context } : {}),
     },
@@ -1146,8 +1296,8 @@ async function handleSapBatchBusinessPartners(
   if (!parsed.success) {
     writeJson(res, 400, {
       error: {
-        code: 'validation_error',
-        message: 'Invalid SAP batch payload.',
+        code: "validation_error",
+        message: "Invalid SAP batch payload.",
         details: parsed.error.flatten(),
       },
     });
@@ -1168,16 +1318,18 @@ async function handleSapBatchBusinessPartners(
       name: item.name,
       ...(item.country ? { country: item.country } : {}),
       ...(item.role ? { role: item.role } : {}),
-      entityType: input.screening?.entityType ?? 'any',
-      matchMode: input.screening?.matchMode ?? 'strict',
-      ...(input.screening?.minScore !== undefined ? { minScore: input.screening.minScore } : {}),
+      entityType: input.screening?.entityType ?? "any",
+      matchMode: input.screening?.matchMode ?? "strict",
+      ...(input.screening?.minScore !== undefined
+        ? { minScore: input.screening.minScore }
+        : {}),
       ...(input.screening?.sources ? { sources: input.screening.sources } : {}),
       limit: input.screening?.limit ?? 25,
       offset: 0,
     };
 
     const response = await executeScreening(screeningInput, reqLog);
-    if ('error' in response) {
+    if ("error" in response) {
       failedCount += 1;
       failedItems.push({
         bpId: item.bpId,
@@ -1188,16 +1340,17 @@ async function handleSapBatchBusinessPartners(
         eventId: randomUUID(),
         bpId: item.bpId,
         queryName: item.name,
-        matchMode: input.screening?.matchMode ?? 'strict',
-        matchModeUsed: input.screening?.matchMode ?? 'strict',
-        entityType: input.screening?.entityType ?? 'any',
+        matchMode: input.screening?.matchMode ?? "strict",
+        matchModeUsed: input.screening?.matchMode ?? "strict",
+        entityType: input.screening?.entityType ?? "any",
         sourcesQueried:
           input.screening?.sources && input.screening.sources.length > 0
             ? input.screening.sources
             : [...SOURCE_CODES],
         executedAt: new Date().toISOString(),
         hitCount: 0,
-        screeningStatus: response.error.code === 'mirror_not_ready' ? 'not_ready' : 'error',
+        screeningStatus:
+          response.error.code === "mirror_not_ready" ? "not_ready" : "error",
       });
       continue;
     }
@@ -1209,17 +1362,17 @@ async function handleSapBatchBusinessPartners(
   writeJson(res, 202, {
     integration: {
       sourceSystem: input.sourceSystem,
-      mode: 'batch',
+      mode: "batch",
       ...(input.triggeredBy ? { triggeredBy: input.triggeredBy } : {}),
     },
     batchId,
-    status: 'accepted',
+    status: "accepted",
     acceptedAt,
     acceptedCount: input.items.length,
     processedCount,
     failedCount,
     failedItems,
-    note: 'SAP batch endpoint currently processes immediately in-process and records per-BP history events.',
+    note: "SAP batch endpoint currently processes immediately in-process and records per-BP history events.",
     caveat: SCREENING_CAVEAT,
   });
 }
@@ -1233,12 +1386,17 @@ function handleListExceptions(bpId: string, res: ServerResponse): void {
 }
 
 function handleListComplianceCases(url: URL, res: ServerResponse): void {
-  const statusFilter = url.searchParams.get('status');
-  const validStatus = new Set(['open', 'in_review', 'pending_approval', 'closed']);
+  const statusFilter = url.searchParams.get("status");
+  const validStatus = new Set([
+    "open",
+    "in_review",
+    "pending_approval",
+    "closed",
+  ]);
   if (statusFilter && !validStatus.has(statusFilter)) {
     writeJson(res, 400, {
       error: {
-        code: 'validation_error',
+        code: "validation_error",
         message:
           "Query parameter 'status' must be one of: open, in_review, pending_approval, closed.",
       },
@@ -1246,8 +1404,8 @@ function handleListComplianceCases(url: URL, res: ServerResponse): void {
     return;
   }
 
-  const limit = parsePositiveInt(url.searchParams.get('limit'), 25, 100);
-  const offset = parsePositiveInt(url.searchParams.get('offset'), 0, 1_000_000);
+  const limit = parsePositiveInt(url.searchParams.get("limit"), 25, 100);
+  const offset = parsePositiveInt(url.searchParams.get("offset"), 0, 1_000_000);
 
   const allCases = [...complianceCasesById.values()]
     .filter((item) => (statusFilter ? item.status === statusFilter : true))
@@ -1261,7 +1419,9 @@ function handleListComplianceCases(url: URL, res: ServerResponse): void {
       returned: page.length,
       totalAvailable: allCases.length,
       hasMore: offset + page.length < allCases.length,
-      ...(offset + page.length < allCases.length ? { nextOffset: offset + page.length } : {}),
+      ...(offset + page.length < allCases.length
+        ? { nextOffset: offset + page.length }
+        : {}),
     },
     cases: page.map((item) => ({
       caseId: item.caseId,
@@ -1273,7 +1433,7 @@ function handleListComplianceCases(url: URL, res: ServerResponse): void {
       updatedAt: item.updatedAt,
       latestEventId: item.latestEventId,
       hitCount: item.hits.length,
-      openHitCount: item.hits.filter((h) => h.reviewStatus === 'open').length,
+      openHitCount: item.hits.filter((h) => h.reviewStatus === "open").length,
     })),
   });
 }
@@ -1283,7 +1443,7 @@ function handleGetComplianceCase(caseId: string, res: ServerResponse): void {
   if (!existing) {
     writeJson(res, 404, {
       error: {
-        code: 'not_found',
+        code: "not_found",
         message: `No compliance case with id '${caseId}'.`,
       },
     });
@@ -1307,8 +1467,8 @@ async function handleDecideComplianceCase(
   if (!parsed.success) {
     writeJson(res, 400, {
       error: {
-        code: 'validation_error',
-        message: 'Invalid request payload for compliance case decision.',
+        code: "validation_error",
+        message: "Invalid request payload for compliance case decision.",
         details: parsed.error.flatten(),
       },
     });
@@ -1319,7 +1479,7 @@ async function handleDecideComplianceCase(
   if (!existing) {
     writeJson(res, 404, {
       error: {
-        code: 'not_found',
+        code: "not_found",
         message: `No compliance case with id '${caseId}'.`,
       },
     });
@@ -1331,27 +1491,30 @@ async function handleDecideComplianceCase(
   if (decisionInput.approvedBy && decisionInput.approvedBy === proposedBy) {
     writeJson(res, 400, {
       error: {
-        code: 'validation_error',
-        message: 'Four-eyes rule violated: approvedBy must be different from proposedBy.',
+        code: "validation_error",
+        message:
+          "Four-eyes rule violated: approvedBy must be different from proposedBy.",
       },
     });
     return;
   }
 
   const now = new Date().toISOString();
-  const requiresFourEyes = decisionInput.decision !== 'false_positive';
+  const requiresFourEyes = decisionInput.decision !== "false_positive";
   const approvalStatus = requiresFourEyes
     ? decisionInput.approvedBy
-      ? 'approved'
-      : 'pending'
-    : 'not_required';
+      ? "approved"
+      : "pending"
+    : "not_required";
 
   const decision: StoredCaseDecision = {
     decisionId: randomUUID(),
     decision: decisionInput.decision,
     decidedBy: decisionInput.decidedBy,
     proposedBy,
-    ...(decisionInput.approvedBy ? { approvedBy: decisionInput.approvedBy } : {}),
+    ...(decisionInput.approvedBy
+      ? { approvedBy: decisionInput.approvedBy }
+      : {}),
     ...(decisionInput.comment ? { comment: decisionInput.comment } : {}),
     requiresFourEyes,
     approvalStatus,
@@ -1361,21 +1524,21 @@ async function handleDecideComplianceCase(
   existing.decisions.unshift(decision);
   existing.updatedAt = now;
   existing.status =
-    decisionInput.decision === 'false_positive'
-      ? 'closed'
+    decisionInput.decision === "false_positive"
+      ? "closed"
       : decisionInput.approvedBy
-        ? 'closed'
-        : 'pending_approval';
+        ? "closed"
+        : "pending_approval";
 
   const reviewStatus =
-    decisionInput.decision === 'confirmed_match'
-      ? 'confirmed_match'
-      : decisionInput.decision === 'false_positive'
-        ? 'false_positive'
-        : 'escalated';
+    decisionInput.decision === "confirmed_match"
+      ? "confirmed_match"
+      : decisionInput.decision === "false_positive"
+        ? "false_positive"
+        : "escalated";
 
   for (const hit of existing.hits) {
-    if (hit.reviewStatus === 'open') {
+    if (hit.reviewStatus === "open") {
       hit.reviewStatus = reviewStatus;
     }
   }
@@ -1384,7 +1547,7 @@ async function handleDecideComplianceCase(
     caseId: existing.caseId,
     status: existing.status,
     decision,
-    note: 'Decision recorded. A screening hit remains a candidate to verify; final action is subject to your compliance workflow.',
+    note: "Decision recorded. A screening hit remains a candidate to verify; final action is subject to your compliance workflow.",
   });
 }
 
@@ -1400,8 +1563,8 @@ async function handleCreateException(
   if (!parsed.success) {
     writeJson(res, 400, {
       error: {
-        code: 'validation_error',
-        message: 'Invalid request payload for exception creation.',
+        code: "validation_error",
+        message: "Invalid request payload for exception creation.",
         details: parsed.error.flatten(),
       },
     });
@@ -1415,7 +1578,7 @@ async function handleCreateException(
     justification: parsed.data.justification,
     ...(parsed.data.validFrom ? { validFrom: parsed.data.validFrom } : {}),
     ...(parsed.data.validUntil ? { validUntil: parsed.data.validUntil } : {}),
-    status: 'active',
+    status: "active",
     createdAt: now,
   };
 
@@ -1426,7 +1589,7 @@ async function handleCreateException(
   writeJson(res, 201, {
     bpId,
     exceptionId: created.exceptionId,
-    status: 'created',
+    status: "created",
     exception: created,
   });
 }
@@ -1436,16 +1599,16 @@ async function executeScreening(
   reqLog: ContextLogger,
 ): Promise<
   | {
-    body: ScreeningResponseBody;
-  }
+      body: ScreeningResponseBody;
+    }
   | {
-    status: 503;
-    error: {
-      code: 'mirror_not_ready';
-      message: string;
-      recovery: string;
-    };
-  }
+      status: 503;
+      error: {
+        code: "mirror_not_ready";
+        message: string;
+        recovery: string;
+      };
+    }
 > {
   const svc = getScreeningService();
   const sanctions = await svc.sanctionsReadiness();
@@ -1453,15 +1616,18 @@ async function executeScreening(
     return {
       status: 503,
       error: {
-        code: 'mirror_not_ready',
-        message: 'The local sanctions mirror is not yet populated.',
+        code: "mirror_not_ready",
+        message: "The local sanctions mirror is not yet populated.",
         recovery:
-          'Run the mirror:init lifecycle script to load the sanctions lists, then retry; check /api/v1/sources for readiness.',
+          "Run the mirror:init lifecycle script to load the sanctions lists, then retry; check /api/v1/sources for readiness.",
       },
     };
   }
 
-  const sources = input.sources && input.sources.length > 0 ? input.sources : [...SOURCE_CODES];
+  const sources =
+    input.sources && input.sources.length > 0
+      ? input.sources
+      : [...SOURCE_CODES];
   const result = await svc.screenName(
     {
       query: input.name,
@@ -1498,7 +1664,9 @@ async function executeScreening(
         entityType: input.entityType,
         ...(input.minScore !== undefined ? { minScore: input.minScore } : {}),
         sources,
-        ...(sanctions.completedAt ? { sourcesAsOf: sanctions.completedAt } : {}),
+        ...(sanctions.completedAt
+          ? { sourcesAsOf: sanctions.completedAt }
+          : {}),
       },
       pagination: {
         limit: input.limit,
@@ -1511,7 +1679,10 @@ async function executeScreening(
       },
       hits: await Promise.all(
         result.hits.map(async (hit) => {
-          const designation = await svc.getDesignation(hit.source, hit.sourceEntryId);
+          const designation = await svc.getDesignation(
+            hit.source,
+            hit.sourceEntryId,
+          );
           return {
             source: hit.source,
             sourceLabel: SOURCE_LABELS[hit.source],
@@ -1524,9 +1695,13 @@ async function executeScreening(
             aliases: designation?.payload.aliases ?? [],
             identifiers: designation?.payload.identifiers ?? [],
             ...(hit.score !== undefined ? { score: hit.score } : {}),
-            ...(hit.queryTokenCoverage ? { queryTokenCoverage: hit.queryTokenCoverage } : {}),
+            ...(hit.queryTokenCoverage
+              ? { queryTokenCoverage: hit.queryTokenCoverage }
+              : {}),
             ...(hit.program ? { program: hit.program } : {}),
-            ...(hit.designationDate ? { designationDate: hit.designationDate } : {}),
+            ...(hit.designationDate
+              ? { designationDate: hit.designationDate }
+              : {}),
           };
         }),
       ),
@@ -1556,10 +1731,15 @@ function recordSuccessfulScreeningSideEffects(
       : {}),
     executedAt: new Date().toISOString(),
     hitCount: responseBody.hits.length,
-    screeningStatus: 'screened',
+    screeningStatus: "screened",
   });
 
-  upsertComplianceCaseFromScreening(input.bpId, input.name, eventId, responseBody.hits);
+  upsertComplianceCaseFromScreening(
+    input.bpId,
+    input.name,
+    eventId,
+    responseBody.hits,
+  );
 }
 
 function appendHistoryEvent(event: StoredScreeningEvent): void {
@@ -1575,7 +1755,11 @@ function clearRestState(): void {
   complianceCaseIdsByBpId.clear();
 }
 
-function parsePositiveInt(raw: string | null, defaultValue: number, max: number): number {
+function parsePositiveInt(
+  raw: string | null,
+  defaultValue: number,
+  max: number,
+): number {
   if (!raw) return defaultValue;
   const value = Number.parseInt(raw, 10);
   if (Number.isNaN(value) || value < 0) return defaultValue;
@@ -1592,7 +1776,7 @@ async function readJsonBodyForRoute(
     const err = toError(error);
     writeJson(res, 400, {
       error: {
-        code: 'validation_error',
+        code: "validation_error",
         message: err.message,
       },
     });
@@ -1601,7 +1785,8 @@ async function readJsonBodyForRoute(
 }
 
 function matchBpHistoryPath(pathname: string): { bpId: string } | undefined {
-  const match = /^\/api\/v1\/screening\/business-partner\/([^/]+)\/history$/.exec(pathname);
+  const match =
+    /^\/api\/v1\/screening\/business-partner\/([^/]+)\/history$/.exec(pathname);
   if (!match?.[1]) return undefined;
   return { bpId: decodeURIComponent(match[1]) };
 }
@@ -1624,14 +1809,20 @@ function matchExceptionsPath(pathname: string): { bpId: string } | undefined {
   return { bpId: decodeURIComponent(match[1]) };
 }
 
-function matchComplianceCasePath(pathname: string): { caseId: string } | undefined {
+function matchComplianceCasePath(
+  pathname: string,
+): { caseId: string } | undefined {
   const match = /^\/api\/v1\/compliance\/cases\/([^/]+)$/.exec(pathname);
   if (!match?.[1]) return undefined;
   return { caseId: decodeURIComponent(match[1]) };
 }
 
-function matchComplianceCaseDecisionPath(pathname: string): { caseId: string } | undefined {
-  const match = /^\/api\/v1\/compliance\/cases\/([^/]+)\/decision$/.exec(pathname);
+function matchComplianceCaseDecisionPath(
+  pathname: string,
+): { caseId: string } | undefined {
+  const match = /^\/api\/v1\/compliance\/cases\/([^/]+)\/decision$/.exec(
+    pathname,
+  );
   if (!match?.[1]) return undefined;
   return { caseId: decodeURIComponent(match[1]) };
 }
@@ -1648,7 +1839,10 @@ function upsertComplianceCaseFromScreening(
   const caseIds = complianceCaseIdsByBpId.get(bpId) ?? [];
   const openCase = caseIds
     .map((id) => complianceCasesById.get(id))
-    .find((item): item is StoredComplianceCase => !!item && item.status !== 'closed');
+    .find(
+      (item): item is StoredComplianceCase =>
+        !!item && item.status !== "closed",
+    );
 
   if (openCase) {
     openCase.updatedAt = new Date().toISOString();
@@ -1664,7 +1858,7 @@ function upsertComplianceCaseFromScreening(
     caseId: randomUUID(),
     bpId,
     businessPartnerName,
-    status: 'open',
+    status: "open",
     priority: inferCasePriority(caseHits),
     createdAt: now,
     updatedAt: now,
@@ -1678,20 +1872,27 @@ function upsertComplianceCaseFromScreening(
   complianceCaseIdsByBpId.set(bpId, [created.caseId, ...caseIds]);
 }
 
-function normalizeCaseHits(hits: Array<Record<string, unknown>>): StoredCaseHit[] {
+function normalizeCaseHits(
+  hits: Array<Record<string, unknown>>,
+): StoredCaseHit[] {
   const out: StoredCaseHit[] = [];
   for (const hit of hits) {
-    const source = typeof hit.source === 'string' && hit.source.length > 0 ? hit.source : undefined;
+    const source =
+      typeof hit.source === "string" && hit.source.length > 0
+        ? hit.source
+        : undefined;
     const sourceEntryId =
-      typeof hit.sourceEntryId === 'string' && hit.sourceEntryId.length > 0
+      typeof hit.sourceEntryId === "string" && hit.sourceEntryId.length > 0
         ? hit.sourceEntryId
         : undefined;
     const matchedName =
-      typeof hit.matchedName === 'string' && hit.matchedName.length > 0
+      typeof hit.matchedName === "string" && hit.matchedName.length > 0
         ? hit.matchedName
         : undefined;
     const matchType =
-      hit.matchType === 'exact' || hit.matchType === 'strong' || hit.matchType === 'approximate'
+      hit.matchType === "exact" ||
+      hit.matchType === "strong" ||
+      hit.matchType === "approximate"
         ? hit.matchType
         : undefined;
     if (!source || !sourceEntryId || !matchedName || !matchType) continue;
@@ -1702,16 +1903,21 @@ function normalizeCaseHits(hits: Array<Record<string, unknown>>): StoredCaseHit[
       sourceEntryId,
       matchedName,
       matchType,
-      ...(typeof hit.score === 'number' ? { score: hit.score } : {}),
-      reviewStatus: 'open',
+      ...(typeof hit.score === "number" ? { score: hit.score } : {}),
+      reviewStatus: "open",
     });
   }
   return out;
 }
 
-function mergeCaseHits(complianceCase: StoredComplianceCase, newHits: StoredCaseHit[]): void {
+function mergeCaseHits(
+  complianceCase: StoredComplianceCase,
+  newHits: StoredCaseHit[],
+): void {
   const existingKeys = new Set(
-    complianceCase.hits.map((hit) => `${hit.source}|${hit.sourceEntryId}|${hit.matchedName}`),
+    complianceCase.hits.map(
+      (hit) => `${hit.source}|${hit.sourceEntryId}|${hit.matchedName}`,
+    ),
   );
 
   for (const hit of newHits) {
@@ -1722,13 +1928,16 @@ function mergeCaseHits(complianceCase: StoredComplianceCase, newHits: StoredCase
   }
 }
 
-function inferCasePriority(hits: StoredCaseHit[]): 'low' | 'medium' | 'high' {
-  if (hits.some((hit) => hit.matchType === 'exact')) return 'high';
-  if (hits.some((hit) => hit.matchType === 'strong')) return 'medium';
-  return 'low';
+function inferCasePriority(hits: StoredCaseHit[]): "low" | "medium" | "high" {
+  if (hits.some((hit) => hit.matchType === "exact")) return "high";
+  if (hits.some((hit) => hit.matchType === "strong")) return "medium";
+  return "low";
 }
 
-function createRequestLogger(operation: string, requestId: string): ContextLogger {
+function createRequestLogger(
+  operation: string,
+  requestId: string,
+): ContextLogger {
   const contextFor = (data?: Record<string, unknown>) =>
     requestContextService.createRequestContext({
       operation,
@@ -1765,7 +1974,7 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const maxBytes = 1_000_000;
 
   for await (const chunk of req) {
-    const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     byteCount += buffer.length;
     if (byteCount > maxBytes) {
       throw new Error(`Request payload exceeds ${maxBytes} bytes.`);
@@ -1776,53 +1985,58 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   if (chunks.length === 0) return {};
 
   try {
-    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
+    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
   } catch {
-    throw new Error('Request payload is not valid JSON.');
+    throw new Error("Request payload is not valid JSON.");
   }
 }
 
 function readRequestId(req: IncomingMessage): string {
-  const header = req.headers['x-request-id'];
-  if (typeof header === 'string' && header.trim()) return header.trim();
-  if (Array.isArray(header) && header.length > 0 && header[0]?.trim()) return header[0].trim();
+  const header = req.headers["x-request-id"];
+  if (typeof header === "string" && header.trim()) return header.trim();
+  if (Array.isArray(header) && header.length > 0 && header[0]?.trim())
+    return header[0].trim();
   return randomUUID();
 }
 
 function writeNoContent(res: ServerResponse): void {
   res.statusCode = 204;
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader(
-    'Access-Control-Allow-Headers',
+    "Access-Control-Allow-Headers",
     `Content-Type, X-Request-Id, ${IDEMPOTENCY_KEY_HEADER}`,
   );
   res.end();
 }
 
-function writeJson(res: ServerResponse, status: number, payload: unknown): void {
+function writeJson(
+  res: ServerResponse,
+  status: number,
+  payload: unknown,
+): void {
   res.statusCode = status;
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader(
-    'Access-Control-Allow-Headers',
+    "Access-Control-Allow-Headers",
     `Content-Type, X-Request-Id, ${IDEMPOTENCY_KEY_HEADER}`,
   );
-  res.setHeader('X-Rest-Timeout-Ms', String(DEFAULT_REST_TIMEOUT_MS));
+  res.setHeader("X-Rest-Timeout-Ms", String(DEFAULT_REST_TIMEOUT_MS));
   res.end(JSON.stringify(payload));
 }
 
 function writeHtml(res: ServerResponse, status: number, payload: string): void {
   res.statusCode = status;
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader(
-    'Access-Control-Allow-Headers',
+    "Access-Control-Allow-Headers",
     `Content-Type, X-Request-Id, ${IDEMPOTENCY_KEY_HEADER}`,
   );
-  res.setHeader('X-Rest-Timeout-Ms', String(DEFAULT_REST_TIMEOUT_MS));
+  res.setHeader("X-Rest-Timeout-Ms", String(DEFAULT_REST_TIMEOUT_MS));
   res.end(payload);
 }
 
@@ -1833,14 +2047,14 @@ function writeText(
   contentType: string,
 ): void {
   res.statusCode = status;
-  res.setHeader('Content-Type', contentType);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader(
-    'Access-Control-Allow-Headers',
+    "Access-Control-Allow-Headers",
     `Content-Type, X-Request-Id, ${IDEMPOTENCY_KEY_HEADER}`,
   );
-  res.setHeader('X-Rest-Timeout-Ms', String(DEFAULT_REST_TIMEOUT_MS));
+  res.setHeader("X-Rest-Timeout-Ms", String(DEFAULT_REST_TIMEOUT_MS));
   res.end(payload);
 }
 
