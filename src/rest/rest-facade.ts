@@ -56,16 +56,14 @@ const PartnerIdentifierSchema = z
     value: z
       .string()
       .min(1)
-      .describe('Published identifier value, such as an IMO or registration number.'),
+      .describe(
+        "Published identifier value, such as an IMO or registration number.",
+      ),
     type: z
       .string()
       .min(1)
       .optional()
       .describe("Optional identifier category, such as IMO or Registration."),
-    value: z
-      .string()
-      .min(1)
-      .describe("Identifier value as supplied by the business partner source."),
   })
   .strict();
 
@@ -669,7 +667,11 @@ async function handleOpenApiYaml(res: ServerResponse): Promise<void> {
   });
 }
 
-function proxyMcpRequest(req: IncomingMessage, res: ServerResponse, url: URL): void {
+function proxyMcpRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): void {
   const serverConfig = getServerConfig();
   const upstream = httpRequest(
     {
