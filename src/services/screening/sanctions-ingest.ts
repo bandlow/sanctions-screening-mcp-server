@@ -328,147 +328,6 @@ async function* streamFlatRecords(
   }
 }
 
-/** Parse one RFC-4180 row, including quoted commas and escaped quotes. */
-function parseCsvRow(line: string): string[] {
-  const values: string[] = [];
-  let value = '';
-  let quoted = false;
-  for (let index = 0; index < line.length; index += 1) {
-    const character = line[index];
-    if (character === '"') {
-      if (quoted && line[index + 1] === '"') {
-        value += '"';
-        index += 1;
-      } else {
-        quoted = !quoted;
-      }
-    } else if (character === ',' && !quoted) {
-      values.push(value.trim());
-      value = '';
-    } else {
-      value += character;
-    }
-  }
-  values.push(value.trim());
-  return values;
-}
-
-function normalizeCsvHeader(value: string): string {
-  return fold(value.replace(/^\uFEFF/, '')).replace(/[^a-z0-9]+/g, '_');
-}
-
-function bisColumn(row: Record<string, string>, ...names: string[]): string | undefined {
-  for (const name of names) {
-    const value = row[normalizeCsvHeader(name)];
-    if (value?.trim()) return value.trim();
-  }
-  return undefined;
-}
-
-function bisAddress(row: Record<string, string>): AddressRecord[] {
-  const address = [
-    bisColumn(row, 'Street_Address', 'Address', 'Street'),
-    bisColumn(row, 'City'),
-    bisColumn(row, 'State/Province', 'State'),
-    bisColumn(row, 'Postal_Code', 'Postal Code'),
-    bisColumn(row, 'Country'),
-  ].filter((part): part is string => Boolean(part));
-  return address.length ? [{ full: address.join(', '), ...opt('country', address.at(-1)) }] : [];
-}
-
-function parseBisRow(
-  row: Record<string, string>,
-  source: 'us_bis_entity' | 'us_bis_dpl' | 'us_bis_unverified',
-  rowNumber: number,
-  rejections: IngestRejections,
-): NormalizedDesignation | null {
-  const primary = bisColumn(row, 'Name', 'Entity Name', 'Entity_Name');
-  if (!isUsableName(primary)) {
-    rejections.unusableName += 1;
-    return null;
-  }
-  const address = bisAddress(row);
-  const publishedId = bisColumn(
-    row,
-    'Entity Number',
-    'Entry ID',
-    'Entry Number',
-    'DPL Number',
-    'UVL Number',
-    'Reference Number',
-  );
-  const stableId = publishedId ?? `${fold(primary)}|${fold(address[0]?.full ?? '')}|${fold(bisColumn(row, 'Effective Date', 'Last Update') ?? '')}`;
-  if (!stableId) {
-    rejections.missingIdentifier += 1;
-    return null;
-  }
-  const alternateName = bisColumn(row, 'Alternate Name');
-  const entityType = source === 'us_bis_entity' ? 'organization' : 'unknown';
-  const program = source === 'us_bis_entity'
-    ? 'US-BIS-ENTITY-LIST'
-    : source === 'us_bis_dpl'
-      ? 'US-BIS-DENIED-PERSONS-LIST'
-      : 'US-BIS-UNVERIFIED-LIST';
-  return {
-    id: `${source}:${stableId}:${rowNumber}`,
-    source,
-    sourceEntryId: `${stableId}:${rowNumber}`,
-    entityType,
-    primaryName: primary,
-    program,
-    ...opt('designationDate', bisColumn(row, 'Effective Date', 'Last Update')),
-    payload: {
-      aliases: alternateName ? [{ name: alternateName, nameType: 'aka' }] : [],
-      identifiers: [],
-      addresses: address,
-      datesOfBirth: [],
-      nationalities: [],
-      ...opt('remarks', bisColumn(row, 'Remarks/Notes', 'Action', 'License Policy')),
-    },
-  };
-}
-
-/** Parse a BIS CSV or CSV-formatted TXT download into normalized designations. */
-export function parseBisCsv(
-  text: string,
-  source: 'us_bis_entity' | 'us_bis_dpl' | 'us_bis_unverified',
-  rejections: IngestRejections = createRejections(),
-): NormalizedDesignation[] {
-  const lines = text.split(/\r?\n/).filter((line) => line.trim());
-  const headers = lines.shift();
-  if (!headers) return [];
-  const names = parseCsvRow(headers).map(normalizeCsvHeader);
-  return lines
-    .map((line, index) => {
-      const values = parseCsvRow(line);
-      const row = Object.fromEntries(names.map((name, column) => [name, values[column] ?? '']));
-      return parseBisRow(row, source, index + 2, rejections);
-    })
-    .filter(Boolean) as NormalizedDesignation[];
-}
-
-/** Stream a BIS CSV/TXT response after decoding its bounded, small dataset. */
-export async function* streamBisCsvFromText(
-  textChunks: AsyncIterable<string>,
-  source: 'us_bis_entity' | 'us_bis_dpl' | 'us_bis_unverified',
-  state: HarvestState,
-): AsyncGenerator<NormalizedDesignation> {
-  let text = '';
-  for await (const chunk of textChunks) text += chunk;
-  yield* parseBisCsv(text, source, state.rejections);
-}
-
-function buildBisIngester(
-  source: 'us_bis_entity' | 'us_bis_dpl' | 'us_bis_unverified',
-  url: () => string,
-): SanctionsIngester {
-  return buildStreamingIngester({
-    source,
-    url,
-    stream: (textChunks, state) => streamBisCsvFromText(textChunks, source, state),
-  });
-}
-
 /** How to reach one source and normalize its stream. */
 interface StreamingSourceSpec {
   source: SourceCode;
@@ -1844,21 +1703,18 @@ function mapBisProgram(source: BisSourceCode): string {
 function parseBisRow(
   row: Record<string, string>,
   source: BisSourceCode,
-  idKey: string,
+  idKey: string | undefined,
   nameKey: string,
+  rowNumber: number,
   rejections: IngestRejections,
 ): NormalizedDesignation | null {
-  const sourceEntryId = row[idKey]?.trim();
-  if (!sourceEntryId) {
-    rejections.missingIdentifier += 1;
-    return null;
-  }
-
   const primaryName = row[nameKey]?.trim();
   if (!isUsableName(primaryName)) {
     rejections.unusableName += 1;
     return null;
   }
+  const sourceEntryId =
+    (idKey ? row[idKey]?.trim() : undefined) || `${fold(primaryName)}:${rowNumber}`;
 
   const aliases = [
     lookupRow(row, ['aka', 'alias', 'aliases', 'alternate_name', 'alternate_names']),
@@ -1900,10 +1756,13 @@ function parseBisRow(
   ]);
 
   return {
-    id: `${source}:${sourceEntryId}`,
+    id: `${source}:${sourceEntryId}:${rowNumber}`,
     source,
-    sourceEntryId,
-    entityType: mapBisEntityType(lookupRow(row, ['entity_type', 'type', 'category'])),
+    sourceEntryId: `${sourceEntryId}:${rowNumber}`,
+    entityType:
+      source === 'us_bis_entity'
+        ? 'organization'
+        : mapBisEntityType(lookupRow(row, ['entity_type', 'type', 'category'])),
     primaryName,
     ...opt('program', program),
     ...opt('designationDate', designationDate),
@@ -1939,10 +1798,10 @@ export function parseBisCsv(
   const headerCells = parseCsvLine(headerLine).map(normalizeCsvHeader);
   const idKey = bisIdColumn(headerCells);
   const nameKey = bisNameColumn(headerCells);
-  if (!idKey || !nameKey) return [];
+  if (!nameKey) return [];
 
   const out: NormalizedDesignation[] = [];
-  for (const line of lines.slice(1)) {
+  for (const [index, line] of lines.slice(1).entries()) {
     const values = parseCsvLine(line);
     const row: Record<string, string> = {};
     for (let i = 0; i < headerCells.length; i += 1) {
@@ -1950,7 +1809,7 @@ export function parseBisCsv(
       if (!key) continue;
       row[key] = values[i] ?? '';
     }
-    const parsed = parseBisRow(row, source, idKey, nameKey, rejections);
+    const parsed = parseBisRow(row, source, idKey, nameKey, index + 2, rejections);
     if (parsed) out.push(parsed);
   }
 
@@ -1966,6 +1825,7 @@ export async function* streamBisCsvFromText(
   let headers: string[] | undefined;
   let idKey: string | undefined;
   let nameKey: string | undefined;
+  let rowNumber = 1;
   for await (const line of splitLines(textChunks)) {
     if (!line.trim()) continue;
     if (!headers) {
@@ -1974,7 +1834,8 @@ export async function* streamBisCsvFromText(
       nameKey = bisNameColumn(headers);
       continue;
     }
-    if (!idKey || !nameKey) continue;
+    rowNumber += 1;
+    if (!nameKey) continue;
 
     const values = parseCsvLine(line);
     const row: Record<string, string> = {};
@@ -1984,7 +1845,7 @@ export async function* streamBisCsvFromText(
       row[key] = values[i] ?? '';
     }
 
-    const parsed = parseBisRow(row, source, idKey, nameKey, state.rejections);
+    const parsed = parseBisRow(row, source, idKey, nameKey, rowNumber, state.rejections);
     if (parsed) yield parsed;
   }
 }
@@ -2008,9 +1869,6 @@ export function buildSanctionsIngesters(): SanctionsIngester[] {
     buildEuIngester(),
     buildUkIngester(),
     buildUnIngester(),
-    buildBisIngester('us_bis_entity', () => cfg.bisEntityUrl),
-    buildBisIngester('us_bis_dpl', () => cfg.bisDplUrl),
-    buildBisIngester('us_bis_unverified', () => cfg.bisUnverifiedUrl),
   ];
   if (cfg.bisEntityUrl) out.push(buildBisIngester('us_bis_entity', cfg.bisEntityUrl));
   if (cfg.bisDplUrl) out.push(buildBisIngester('us_bis_dpl', cfg.bisDplUrl));

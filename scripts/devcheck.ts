@@ -249,9 +249,11 @@ interface DevcheckConfig {
     allowlist?: string[];
   };
   skillsSync?: {
+    enabled?: boolean;
     ignore?: string[];
   };
   skillVersions?: {
+    enabled?: boolean;
     ignore?: string[];
   };
 }
@@ -508,6 +510,7 @@ const ALL_CHECKS: Check[] = [
     // Drift is demoted to a warning via isSuccess — intentional ignores live in
     // devcheck.config.json `skillsSync.ignore`.
     getCommand: () => {
+      if (DEVCHECK_CONFIG.skillsSync?.enabled === false) return null;
       const hasSkills = existsSync(path.join(ROOT_DIR, 'skills'));
       const hasMirrors =
         existsSync(path.join(ROOT_DIR, '.agents/skills')) ||
@@ -532,6 +535,7 @@ const ALL_CHECKS: Check[] = [
     // isSuccess — the typo/whitespace carve-out lives in devcheck.config.json
     // `skillVersions.ignore`.
     getCommand: () => {
+      if (DEVCHECK_CONFIG.skillVersions?.enabled === false) return null;
       if (!existsSync(path.join(ROOT_DIR, 'skills'))) return null;
       return ['bun', 'run', 'scripts/check-skill-versions.ts'];
     },

@@ -32,18 +32,34 @@ import {
   SCREENING_CAVEAT,
   SOURCE_LICENSES,
   sourceUrls,
-} from "@/mcp-server/tools/definitions/_shared.js";
-import { getScreeningService } from "@/services/screening/screening-service.js";
-import {
-  SOURCE_CODES,
-  SOURCE_LABELS,
-  type SourceCode,
-} from "@/services/screening/types.js";
+} from '@/mcp-server/tools/definitions/_shared.js';
+import { getScreeningService } from '@/services/screening/screening-service.js';
+import { SOURCE_CODES, SOURCE_LABELS, type SourceCode } from '@/services/screening/types.js';
 
 const SOURCE_ENUM = z.enum([
-  "ofac_sdn", "ofac_consolidated", "eu", "uk", "un",
-  "us_bis_entity", "us_bis_dpl", "us_bis_unverified",
+  'ofac_sdn',
+  'ofac_consolidated',
+  'eu',
+  'uk',
+  'un',
+  'us_bis_entity',
+  'us_bis_dpl',
+  'us_bis_unverified',
 ]);
+
+const PartnerIdentifierSchema = z
+  .object({
+    value: z
+      .string()
+      .min(1)
+      .describe('Published identifier value, such as an IMO or registration number.'),
+    type: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Optional published identifier category, such as IMO or Passport.'),
+  })
+  .strict();
 
 const BusinessPartnerScreenRequestSchema = z
   .object({
@@ -561,11 +577,7 @@ async function handleOpenApiYaml(res: ServerResponse): Promise<void> {
   });
 }
 
-async function proxyMcpRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  url: URL,
-): Promise<void> {
+function proxyMcpRequest(req: IncomingMessage, res: ServerResponse, url: URL): void {
   const serverConfig = getServerConfig();
   const upstream = httpRequest(
     {
@@ -1428,13 +1440,13 @@ async function executeScreening(
         bpId?: string;
         name: string;
         country?: string;
-        role?: "customer" | "vendor" | "other";
+        role?: 'customer' | 'vendor' | 'other';
       };
       screening: {
         normalizedQuery: string;
-        requestedMatchMode: "strict" | "fuzzy";
-        matchModeUsed: "strict" | "fuzzy";
-        entityType: "any" | "person" | "organization" | "vessel" | "aircraft";
+        requestedMatchMode: 'strict' | 'fuzzy';
+        matchModeUsed: 'strict' | 'fuzzy';
+        entityType: 'any' | 'person' | 'organization' | 'vessel' | 'aircraft';
         minScore?: number;
         sources: Array<z.infer<typeof SOURCE_ENUM>>;
         sourcesAsOf?: string;
@@ -1456,7 +1468,7 @@ async function executeScreening(
   | {
     status: 503;
     error: {
-      code: "mirror_not_ready";
+      code: 'mirror_not_ready';
       message: string;
       recovery: string;
     };
@@ -1706,9 +1718,7 @@ function normalizeCaseHits(hits: Array<Record<string, unknown>>): StoredCaseHit[
         ? hit.matchedName
         : undefined;
     const matchType =
-      hit.matchType === "exact" ||
-        hit.matchType === "strong" ||
-        hit.matchType === "approximate"
+      hit.matchType === 'exact' || hit.matchType === 'strong' || hit.matchType === 'approximate'
         ? hit.matchType
         : undefined;
     if (!source || !sourceEntryId || !matchedName || !matchType) continue;
