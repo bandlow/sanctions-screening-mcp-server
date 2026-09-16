@@ -57,9 +57,7 @@ beforeAll(async () => {
     res.writeHead(404);
     res.end();
   });
-  await new Promise<void>((resolve) =>
-    mcpProxyTarget?.listen(httpPort, '127.0.0.1', resolve),
-  );
+  await new Promise<void>((resolve) => mcpProxyTarget?.listen(httpPort, '127.0.0.1', resolve));
   tempDir = mkdtempSync(join(tmpdir(), 'sanctions-rest-test-'));
   process.env.SANCTIONS_MIRROR_PATH = join(tempDir, 'test.db');
 
@@ -292,5 +290,4 @@ describe('REST facade compliance-case endpoints', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ proxied: true });
   });
-
 });
