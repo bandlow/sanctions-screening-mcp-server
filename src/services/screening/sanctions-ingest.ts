@@ -1,6 +1,6 @@
 /**
  * @fileoverview Sanctions ingesters — one per source (OFAC SDN, OFAC
- * Consolidated, EU FSF, UK Sanctions List, UN SC Consolidated). Each streams its
+ * Consolidated, EU FSF, UK Sanctions List, UN SC Consolidated, and BIS lists). Each streams its
  * source file, lifts out one record element at a time, and maps it onto the
  * common {@link NormalizedDesignation} schema. The {@link createSanctionsSync}
  * factory wires them into the MirrorService `sync` generator: each refresh
@@ -1703,21 +1703,18 @@ function mapBisProgram(source: BisSourceCode): string {
 function parseBisRow(
   row: Record<string, string>,
   source: BisSourceCode,
-  idKey: string,
+  idKey: string | undefined,
   nameKey: string,
+  rowNumber: number,
   rejections: IngestRejections,
 ): NormalizedDesignation | null {
-  const sourceEntryId = row[idKey]?.trim();
-  if (!sourceEntryId) {
-    rejections.missingIdentifier += 1;
-    return null;
-  }
-
   const primaryName = row[nameKey]?.trim();
   if (!isUsableName(primaryName)) {
     rejections.unusableName += 1;
     return null;
   }
+  const sourceEntryId =
+    (idKey ? row[idKey]?.trim() : undefined) || `${fold(primaryName)}:${rowNumber}`;
 
   const aliases = [
     lookupRow(row, ['aka', 'alias', 'aliases', 'alternate_name', 'alternate_names']),
@@ -1759,10 +1756,13 @@ function parseBisRow(
   ]);
 
   return {
-    id: `${source}:${sourceEntryId}`,
+    id: `${source}:${sourceEntryId}:${rowNumber}`,
     source,
-    sourceEntryId,
-    entityType: mapBisEntityType(lookupRow(row, ['entity_type', 'type', 'category'])),
+    sourceEntryId: `${sourceEntryId}:${rowNumber}`,
+    entityType:
+      source === 'us_bis_entity'
+        ? 'organization'
+        : mapBisEntityType(lookupRow(row, ['entity_type', 'type', 'category'])),
     primaryName,
     ...opt('program', program),
     ...opt('designationDate', designationDate),
@@ -1798,10 +1798,10 @@ export function parseBisCsv(
   const headerCells = parseCsvLine(headerLine).map(normalizeCsvHeader);
   const idKey = bisIdColumn(headerCells);
   const nameKey = bisNameColumn(headerCells);
-  if (!idKey || !nameKey) return [];
+  if (!nameKey) return [];
 
   const out: NormalizedDesignation[] = [];
-  for (const line of lines.slice(1)) {
+  for (const [index, line] of lines.slice(1).entries()) {
     const values = parseCsvLine(line);
     const row: Record<string, string> = {};
     for (let i = 0; i < headerCells.length; i += 1) {
@@ -1809,7 +1809,7 @@ export function parseBisCsv(
       if (!key) continue;
       row[key] = values[i] ?? '';
     }
-    const parsed = parseBisRow(row, source, idKey, nameKey, rejections);
+    const parsed = parseBisRow(row, source, idKey, nameKey, index + 2, rejections);
     if (parsed) out.push(parsed);
   }
 
@@ -1825,6 +1825,7 @@ export async function* streamBisCsvFromText(
   let headers: string[] | undefined;
   let idKey: string | undefined;
   let nameKey: string | undefined;
+  let rowNumber = 1;
   for await (const line of splitLines(textChunks)) {
     if (!line.trim()) continue;
     if (!headers) {
@@ -1833,7 +1834,8 @@ export async function* streamBisCsvFromText(
       nameKey = bisNameColumn(headers);
       continue;
     }
-    if (!idKey || !nameKey) continue;
+    rowNumber += 1;
+    if (!nameKey) continue;
 
     const values = parseCsvLine(line);
     const row: Record<string, string> = {};
@@ -1843,7 +1845,7 @@ export async function* streamBisCsvFromText(
       row[key] = values[i] ?? '';
     }
 
-    const parsed = parseBisRow(row, source, idKey, nameKey, state.rejections);
+    const parsed = parseBisRow(row, source, idKey, nameKey, rowNumber, state.rejections);
     if (parsed) yield parsed;
   }
 }
@@ -1858,7 +1860,7 @@ function buildBisIngester(source: BisSourceCode, url: string): SanctionsIngester
 
 // ─── Registry + sync factory ─────────────────────────────────────────────────
 
-/** All configured sanctions ingesters. */
+/** All sanctions ingesters, configured from the current server config. */
 export function buildSanctionsIngesters(): SanctionsIngester[] {
   const cfg = getServerConfig();
   const out: SanctionsIngester[] = [

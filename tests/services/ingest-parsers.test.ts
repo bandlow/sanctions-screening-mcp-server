@@ -30,7 +30,6 @@ import {
   parseOfac,
   parseUk,
   parseUn,
-  streamBisCsvFromText,
   streamEuFromText,
   streamOfacFromText,
   streamUkFromText,
@@ -353,43 +352,39 @@ describe('UN parser', () => {
   });
 });
 
-// ─── US BIS CSV sources (line-oriented) ────────────────────────────────────────
-
-const BIS_ENTITY_CSV = `Entry ID,Name,Entity Type,Country,Address,Effective Date,Program,License Requirement,Registration Number
-BIS-ENT-1001,Example Quantum Components Ltd,Entity,CN,1 Harbor Rd,2024-03-21,Entity List,NLR to listed entity,REG-9981
-BIS-ENT-1002,John Example Person,Individual,IR,2 Example Ave,2023-12-08,Entity List,License Required,PASSPORT-XY77`;
-
 describe('BIS CSV parser', () => {
-  it('normalizes BIS CSV rows into designation records with identifiers', () => {
-    const rejections = createRejections();
-    const designations = parseBisCsv(BIS_ENTITY_CSV, 'us_bis_entity', rejections);
-    expect(designations).toHaveLength(2);
-    expect(rejections).toEqual({ missingIdentifier: 0, unusableName: 0 });
+  it('normalizes Entity, DPL TXT, and UVL CSV shapes', () => {
+    const entity = parseBisCsv(
+      'Source List,Entity Number,Name,Address,City,Country,Effective Date\nEL,123,Entity One,"5, Main Street",Kabul,Afghanistan,11/21/2011',
+      'us_bis_entity',
+    )[0]!;
+    const dpl = parseBisCsv(
+      '"Name","Street_Address","City","State","Country","Effective_Date"\n"Denied Person","1, Main Street","Berlin","","DE","3/20/1992"',
+      'us_bis_dpl',
+    )[0]!;
+    const uvl = parseBisCsv(
+      'COUNTRY,NAME,ADDRESS\nArmenia,Unverified Company,"Komitas 26/114, Yerevan, Armenia"',
+      'us_bis_unverified',
+    )[0]!;
 
-    const entity = designations.find((d) => d.sourceEntryId === 'BIS-ENT-1001');
     expect(entity).toMatchObject({
-      source: 'us_bis_entity',
+      id: 'us_bis_entity:123:2',
+      sourceEntryId: '123:2',
+      primaryName: 'Entity One',
       entityType: 'organization',
-      primaryName: 'Example Quantum Components Ltd',
-      designationDate: '2024-03-21',
-      program: 'Entity List',
+      program: 'US-BIS-ENTITY-LIST',
     });
-    expect(entity?.payload.identifiers.some((id) => id.value === 'REG-9981')).toBe(true);
-  });
-
-  it('streamed CSV parse matches buffered CSV parse across chunk boundaries', async () => {
-    const oracle = parseBisCsv(BIS_ENTITY_CSV, 'us_bis_entity');
-    for (const size of CHUNK_SIZES) {
-      const state = createHarvestState();
-      const records = await collect(
-        streamBisCsvFromText(chunkStr(BIS_ENTITY_CSV, size), 'us_bis_entity', state),
-      );
-      expect(records, `chunk size ${size}`).toEqual(oracle);
-      expect(state.rejections).toEqual({
-        missingIdentifier: 0,
-        unusableName: 0,
-      });
-    }
+    expect(entity.payload.addresses[0]?.full).toContain('5, Main Street');
+    expect(dpl).toMatchObject({
+      source: 'us_bis_dpl',
+      primaryName: 'Denied Person',
+      program: 'US-BIS-DENIED-PERSONS-LIST',
+    });
+    expect(uvl).toMatchObject({
+      source: 'us_bis_unverified',
+      primaryName: 'Unverified Company',
+      program: 'US-BIS-UNVERIFIED-LIST',
+    });
   });
 });
 

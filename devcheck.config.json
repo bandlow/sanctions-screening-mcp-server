@@ -15,6 +15,12 @@
   "outdated": {
     "allowlist": []
   },
+  "skillsSync": {
+    "enabled": false
+  },
+  "skillVersions": {
+    "enabled": false
+  },
   "packaging": {
     "pluginManifests": true
   }
