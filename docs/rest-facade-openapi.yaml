@@ -65,7 +65,7 @@ paths:
     post:
       tags: [Screening]
       summary: Screen one business partner name
-      description: Screening aid only; results are potential matches, not a compliance determination. This REST operation searches names. Use the MCP sanctions_search_identifier tool for published identifiers such as IMO numbers; dates of birth are currently returned as source detail, not accepted as a search filter.
+      description: Screening aid only; results are potential matches, not a compliance determination. This REST operation searches names and accepts incomplete tokens as strict prefix input, so a query can match the beginning of a longer indexed name token. Use the MCP sanctions_search_identifier tool for published identifiers such as IMO numbers; dates of birth are currently returned as source detail, not accepted as a search filter.
       operationId: screenBusinessPartner
       x-implementation-status: implemented
       parameters:
@@ -225,8 +225,24 @@ components:
           enum: [customer, vendor, other]
         entityType:
           type: string
-          enum: [any, person, organization, vessel, aircraft]
+          enum: [any, person, organization, vessel, aircraft, unknown]
           default: any
+        address:
+          type: object
+          additionalProperties: false
+          properties:
+            street:
+              type: string
+              minLength: 1
+            houseNumber:
+              type: string
+              minLength: 1
+            postalCode:
+              type: string
+              minLength: 1
+            country:
+              type: string
+              minLength: 1
         matchMode:
           type: string
           enum: [strict, fuzzy]
