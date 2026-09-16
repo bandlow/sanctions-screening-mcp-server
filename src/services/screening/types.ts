@@ -1,7 +1,7 @@
 /**
  * @fileoverview Common normalized schema for sanctions designations and GLEIF
  * legal-entity records, plus the matching-engine vocabulary. Every upstream
- * source (OFAC, EU, UK, UN, GLEIF) collapses onto these shapes so the matching
+ * source (OFAC, EU, UK, UN, BIS, GLEIF) collapses onto these shapes so the matching
  * engine and tools never see a source-specific structure.
  * @module services/screening/types
  */
@@ -37,8 +37,8 @@ export const SOURCE_LABELS: Record<SourceCode, string> = {
   uk: 'UK Sanctions List (FCDO)',
   un: 'UN Security Council Consolidated List',
   us_bis_entity: 'US BIS Entity List',
-  us_bis_dpl: 'US BIS Denied Persons List (DPL)',
-  us_bis_unverified: 'US BIS Unverified List',
+  us_bis_dpl: 'US BIS Denied Persons List',
+  us_bis_unverified: 'US BIS Unverified List (UVL)',
 };
 
 /** Coarse entity classification shared across all sources. */

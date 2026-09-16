@@ -207,14 +207,8 @@ export const traceOwnershipTool = tool('sanctions_trace_ownership', {
                   .object({
                     source: z
                       .enum([
-                        'ofac_sdn',
-                        'ofac_consolidated',
-                        'eu',
-                        'uk',
-                        'un',
-                        'us_bis_entity',
-                        'us_bis_dpl',
-                        'us_bis_unverified',
+                        'ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un',
+                        'us_bis_entity', 'us_bis_dpl', 'us_bis_unverified',
                       ])
                       .describe('Watchlist the candidate is on.'),
                     sourceLabel: z.string().describe('Human-readable source list name.'),
@@ -390,23 +384,23 @@ export const traceOwnershipTool = tool('sanctions_trace_ownership', {
           role: node.role,
           ...(screen
             ? {
-                sanctionsScreen: {
-                  totalAvailable: screen.totalAvailable,
-                  totalAvailableBasis: screen.totalAvailableBasis,
-                  // The per-node screen never pages, so whatever the cap left
-                  // behind is everything past the hits returned here.
-                  hasMore: screen.hits.length < screen.totalAvailable,
-                },
-                sanctionsHits: screen.hits.map((h) => ({
-                  source: h.source,
-                  sourceLabel: SOURCE_LABELS[h.source],
-                  sourceEntryId: h.sourceEntryId,
-                  primaryName: h.primaryName,
-                  matchedName: h.matchedName,
-                  matchType: h.matchType,
-                  ...(h.score !== undefined ? { score: h.score } : {}),
-                })),
-              }
+              sanctionsScreen: {
+                totalAvailable: screen.totalAvailable,
+                totalAvailableBasis: screen.totalAvailableBasis,
+                // The per-node screen never pages, so whatever the cap left
+                // behind is everything past the hits returned here.
+                hasMore: screen.hits.length < screen.totalAvailable,
+              },
+              sanctionsHits: screen.hits.map((h) => ({
+                source: h.source,
+                sourceLabel: SOURCE_LABELS[h.source],
+                sourceEntryId: h.sourceEntryId,
+                primaryName: h.primaryName,
+                matchedName: h.matchedName,
+                matchType: h.matchType,
+                ...(h.score !== undefined ? { score: h.score } : {}),
+              })),
+            }
             : {}),
         };
       }),
@@ -472,10 +466,9 @@ export const traceOwnershipTool = tool('sanctions_trace_ownership', {
       if (node.sanctionsScreen) {
         const s = node.sanctionsScreen;
         lines.push(
-          `  - Screen coverage: showing ${node.sanctionsHits?.length ?? 0} of ${s.totalAvailable} potential match(es) (count basis: ${s.totalAvailableBasis}); more available: ${s.hasMore}${
-            s.hasMore
-              ? ` — screen "${node.legalName}" with sanctions_screen_name to page through the rest.`
-              : ''
+          `  - Screen coverage: showing ${node.sanctionsHits?.length ?? 0} of ${s.totalAvailable} potential match(es) (count basis: ${s.totalAvailableBasis}); more available: ${s.hasMore}${s.hasMore
+            ? ` — screen "${node.legalName}" with sanctions_screen_name to page through the rest.`
+            : ''
           }`,
         );
       }

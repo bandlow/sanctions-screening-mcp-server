@@ -26,14 +26,8 @@ export const designationResource = resource('sanctions://designation/{source}/{e
   params: z.object({
     source: z
       .enum([
-        'ofac_sdn',
-        'ofac_consolidated',
-        'eu',
-        'uk',
-        'un',
-        'us_bis_entity',
-        'us_bis_dpl',
-        'us_bis_unverified',
+        'ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un',
+        'us_bis_entity', 'us_bis_dpl', 'us_bis_unverified',
       ])
       .describe('Source list the entry belongs to.'),
     entryId: z.string().min(1).describe("The source list's own entry ID."),

@@ -13,14 +13,8 @@ import { SOURCE_CODES, SOURCE_LABELS } from '@/services/screening/types.js';
 import { SCREENING_CAVEAT } from './_shared.js';
 
 const SOURCE_ENUM = z.enum([
-  'ofac_sdn',
-  'ofac_consolidated',
-  'eu',
-  'uk',
-  'un',
-  'us_bis_entity',
-  'us_bis_dpl',
-  'us_bis_unverified',
+    'ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un',
+    'us_bis_entity', 'us_bis_dpl', 'us_bis_unverified',
 ]);
 
 const IdentifierHitSchema = z
