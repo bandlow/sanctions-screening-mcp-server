@@ -8,64 +8,60 @@
  * @module index
  */
 
-import { createApp } from "@cyanheads/mcp-ts-core";
-import { config } from "@cyanheads/mcp-ts-core/config";
-import {
-  logger,
-  requestContextService,
-  schedulerService,
-} from "@cyanheads/mcp-ts-core/utils";
-import { getServerConfig } from "./config/server-config.js";
-import { allPromptDefinitions } from "./mcp-server/prompts/definitions/index.js";
-import { allResourceDefinitions } from "./mcp-server/resources/definitions/index.js";
-import { allToolDefinitions } from "./mcp-server/tools/definitions/index.js";
-import { startRestFacade } from "./rest/rest-facade.js";
+import { createApp } from '@cyanheads/mcp-ts-core';
+import { config } from '@cyanheads/mcp-ts-core/config';
+import { logger, requestContextService, schedulerService } from '@cyanheads/mcp-ts-core/utils';
+import { getServerConfig } from './config/server-config.js';
+import { allPromptDefinitions } from './mcp-server/prompts/definitions/index.js';
+import { allResourceDefinitions } from './mcp-server/resources/definitions/index.js';
+import { allToolDefinitions } from './mcp-server/tools/definitions/index.js';
+import { startRestFacade } from './rest/rest-facade.js';
 import {
   getScreeningService,
   initScreeningService,
-} from "./services/screening/screening-service.js";
+} from './services/screening/screening-service.js';
 
 await createApp({
-  name: "sanctions-screening-mcp-server",
-  title: "sanctions-screening-mcp-server",
+  name: 'sanctions-screening-mcp-server',
+  title: 'sanctions-screening-mcp-server',
   tools: allToolDefinitions,
   resources: allResourceDefinitions,
   prompts: allPromptDefinitions,
   instructions:
-    'Screen names against the consolidated OFAC, EU, UK, and UN sanctions lists and resolve legal entities against GLEIF, all fuzzy-matched offline over a local mirror. Start with sanctions_screen_name for "is this entity on a watchlist"; sanctions_resolve_entity → sanctions_get_entity → sanctions_trace_ownership for "who is this legal entity and who owns it." Every result is a screening AID, not a compliance determination — a hit is a candidate to verify against the official source, and an empty result is never a clearance. Check sanctions_list_sources for which lists are loaded and how fresh the mirror is.',
+    'Screen names against consolidated OFAC, EU, UK, UN, and BIS export-control watchlists and resolve legal entities against GLEIF, all fuzzy-matched offline over a local mirror. Start with sanctions_screen_name for "is this entity on a watchlist"; sanctions_resolve_entity → sanctions_get_entity → sanctions_trace_ownership for "who is this legal entity and who owns it." Every result is a screening AID, not a compliance determination — a hit is a candidate to verify against the official source, and an empty result is never a clearance. Check sanctions_list_sources for which lists are loaded and how fresh the mirror is.',
   // The tool, resource, and prompt surface is fixed at startup — nothing
   // registers or retires a definition at runtime — so a 2026-07-28 client may
   // hold the listings for an hour. Shared caches may too: the same listings are
   // already served unauthenticated on the landing page and the server card.
   // Per-record read lifetimes live on the resource definitions themselves.
   cacheHints: {
-    "tools/list": { ttlMs: 3_600_000, cacheScope: "public" },
-    "prompts/list": { ttlMs: 3_600_000, cacheScope: "public" },
-    "resources/list": { ttlMs: 3_600_000, cacheScope: "public" },
-    "resources/templates/list": { ttlMs: 3_600_000, cacheScope: "public" },
-    "server/discover": { ttlMs: 3_600_000, cacheScope: "public" },
+    'tools/list': { ttlMs: 3_600_000, cacheScope: 'public' },
+    'prompts/list': { ttlMs: 3_600_000, cacheScope: 'public' },
+    'resources/list': { ttlMs: 3_600_000, cacheScope: 'public' },
+    'resources/templates/list': { ttlMs: 3_600_000, cacheScope: 'public' },
+    'server/discover': { ttlMs: 3_600_000, cacheScope: 'public' },
   },
   landing: {
     requireAuth: false,
     tagline:
-      "Screen names against OFAC, EU, UK, and UN sanctions lists and resolve legal entities against GLEIF — offline, fuzzy-matched. A screening aid, not a compliance determination.",
+      'Screen names against OFAC, EU, UK, UN, and BIS watchlists and resolve legal entities against GLEIF — offline, fuzzy-matched. A screening aid, not a compliance determination.',
     links: [
       {
-        label: "OFAC Sanctions List Service",
-        href: "https://sanctionslistservice.ofac.treas.gov/",
+        label: 'OFAC Sanctions List Service',
+        href: 'https://sanctionslistservice.ofac.treas.gov/',
         external: true,
       },
       {
-        label: "UK Sanctions List",
-        href: "https://sanctionslist.fcdo.gov.uk/",
+        label: 'UK Sanctions List',
+        href: 'https://sanctionslist.fcdo.gov.uk/',
         external: true,
       },
       {
-        label: "UN SC Consolidated List",
-        href: "https://main.un.org/securitycouncil/en/content/un-sc-consolidated-list",
+        label: 'UN SC Consolidated List',
+        href: 'https://main.un.org/securitycouncil/en/content/un-sc-consolidated-list',
         external: true,
       },
-      { label: "GLEIF", href: "https://www.gleif.org/", external: true },
+      { label: 'GLEIF', href: 'https://www.gleif.org/', external: true },
     ],
   },
   async setup() {
@@ -81,28 +77,28 @@ await createApp({
  * redundant and could collide with a manual run.
  */
 function scheduleRefresh(): void {
-  if (config.mcpTransportType !== "http") return;
+  if (config.mcpTransportType !== 'http') return;
   const { refreshCron } = getServerConfig();
   void schedulerService
     .schedule(
-      "sanctions-mirror-refresh",
+      'sanctions-mirror-refresh',
       refreshCron,
       async (ctx) => {
         const svc = getScreeningService();
-        logger.info("Starting scheduled sanctions mirror refresh", ctx);
-        await svc.designations.runSync({ mode: "refresh" });
+        logger.info('Starting scheduled sanctions mirror refresh', ctx);
+        await svc.designations.runSync({ mode: 'refresh' });
         await svc.rebuildNameIndex();
-        logger.info("Scheduled sanctions mirror refresh complete", ctx);
+        logger.info('Scheduled sanctions mirror refresh complete', ctx);
       },
-      "Refreshes the sanctions watchlists from their upstream sources.",
+      'Refreshes the sanctions watchlists from their upstream sources.',
     )
-    .then(() => schedulerService.start("sanctions-mirror-refresh"))
+    .then(() => schedulerService.start('sanctions-mirror-refresh'))
     .catch((err) => {
       logger.error(
-        "Failed to schedule sanctions mirror refresh",
+        'Failed to schedule sanctions mirror refresh',
         err as Error,
         requestContextService.createRequestContext({
-          operation: "scheduleRefresh",
+          operation: 'scheduleRefresh',
         }),
       );
     });

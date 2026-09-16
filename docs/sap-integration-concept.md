@@ -402,6 +402,40 @@ Punkt 3 wurde als lauffähiger MVP direkt in der REST-Fassade umgesetzt:
 
 Wichtig: Der Zustand liegt aktuell noch in-memory im laufenden Prozess (kein persistentes Audit-Backend). Für produktive Compliance-Nachweispflichten bleibt die geplante CAP/HANA-Audit-Schicht unverändert erforderlich.
 
+### Umsetzungsstand Punkt 4 (MVP, 2026-09-07)
+
+Der frühere MVP-Adapter im Screening-Server wurde inzwischen aus der aktiven
+REST-Fassade entfernt. SAP-Eingangskanäle, Audit, Cases und Freigaben gehören
+jetzt ausschließlich in das separate CAP-Projekt `sanctions-audit-server`.
+Die Screening-Fassade dieses Projekts akzeptiert nur noch fachliche
+Screening-Anfragen.
+
+Historischer Stand des MVP:
+
+- Neue Integrationsendpunkte in der REST-Fassade:
+  - `POST /api/v1/integration/sap/ecc/business-partner-changed`
+  - `POST /api/v1/integration/sap/s4/business-partner-changed`
+  - `POST /api/v1/integration/sap/batch-business-partners`
+- ECC- und S/4-Payloads werden auf das bestehende Screening gemappt (kein zweiter Fachkern).
+- Erfolgreiche SAP-Aufrufe schreiben identisch in den vorhandenen In-Process-History- und Case-Fluss.
+- Die Endpunkte sind im OpenAPI-Vertrag dokumentiert und testseitig abgesichert.
+
+Wichtig: Das ist bewusst ein Übergangs-/MVP-Adapter im laufenden Node/Bun-Service. Das Zielbild bleibt unverändert: SAP ruft langfristig primär die CAP/HANA-Compliance-App auf; der MCP-Server bleibt die Screening-Engine hinter der REST-Grenze.
+
+### Umsetzungsstand Punkt 5 (MVP, 2026-09-07)
+
+Punkt 5 wurde im bestehenden Screening-Stack als quellenbasierte Erweiterung umgesetzt:
+
+- Neue Exportkontroll-Quellen als eigene `source`-Codes eingeführt:
+  - `us_bis_entity`
+  - `us_bis_dpl`
+  - `us_bis_unverified`
+- Die Ingest-Pipeline wurde um CSV-basierte BIS-Parser/Streamer erweitert und auf das bestehende `designation`-Schema gemappt.
+- MCP-Tools, Ressourcen, REST-Schemas und OpenAPI wurden auf die neuen Source-Codes erweitert.
+- Source-Metadaten (`sanctions_list_sources`) enthalten jetzt auch BIS-Lizenzen und BIS-URL-Felder.
+
+Wichtig: Die BIS-Quellen sind absichtlich **konfigurationsgetrieben aktivierbar**. Sind `BIS_ENTITY_URL`, `BIS_DPL_URL` und/oder `BIS_UNVERIFIED_URL` nicht gesetzt, läuft der Mirror wie bisher nur mit OFAC/EU/UK/UN (+ GLEIF).
+
 ---
 
 ## Offene Fragen für die nächste Konkretisierungsrunde

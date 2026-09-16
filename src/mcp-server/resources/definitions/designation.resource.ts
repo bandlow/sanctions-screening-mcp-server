@@ -79,6 +79,7 @@ export const designationResource = resource('sanctions://designation/{source}/{e
       addresses: d.payload.addresses,
       datesOfBirth: d.payload.datesOfBirth,
       nationalities: d.payload.nationalities,
+      vesselDetails: d.payload.vesselDetails,
       remarks: d.payload.remarks,
       caveat: SCREENING_CAVEAT,
     };

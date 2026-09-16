@@ -48,6 +48,7 @@ import type {
   NameRecord,
   NormalizedDesignation,
   SourceCode,
+  VesselDetails,
 } from '@/services/screening/types.js';
 import { parseXml } from '@/services/screening/xml.js';
 import { decodeUtf8Stream, scanRecordFragments } from '@/services/screening/xml-stream.js';
@@ -111,6 +112,9 @@ const SYNC_PAGE_SIZE = 2500;
 /** Head characters the HTML rate-limit guard classifies a response body on. */
 const HTML_GUARD_CHARS = 64;
 
+/** US BIS source codes handled by the CSV ingest path. */
+type BisSourceCode = 'us_bis_entity' | 'us_bis_dpl' | 'us_bis_unverified';
+
 /** Coerce fast-xml-parser's "single child → object, many → array" into an array. */
 function asArray<T>(value: T | T[] | undefined | null): T[] {
   if (value == null) return [];
@@ -148,6 +152,79 @@ function opt<K extends string>(key: K, value: string | undefined): Record<K, str
   return value ? { [key]: value } : {};
 }
 
+/** Split a decoded text stream into lines, carrying partial tails across chunks. */
+async function* splitLines(textChunks: AsyncIterable<string>): AsyncGenerator<string> {
+  let carry = '';
+  for await (const chunk of textChunks) {
+    carry += chunk;
+    const lines = carry.split(/\r?\n/);
+    carry = lines.pop() ?? '';
+    for (const line of lines) yield line;
+  }
+  if (carry) yield carry;
+}
+
+/** Parse one CSV line, including quoted fields and escaped quotes. */
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cell += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+    if (ch === ',' && !inQuotes) {
+      out.push(cell.trim());
+      cell = '';
+      continue;
+    }
+    cell += ch;
+  }
+  out.push(cell.trim());
+  return out;
+}
+
+/** Case/whitespace-insensitive key used for CSV header lookups. */
+function normalizeCsvHeader(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function bisIdColumn(headers: string[]): string | undefined {
+  const preferred = [
+    'entry_id',
+    'id',
+    'source_id',
+    'entity_number',
+    'denied_persons_list_number',
+    'uvl_number',
+  ];
+  return preferred.find((key) => headers.includes(key));
+}
+
+function bisNameColumn(headers: string[]): string | undefined {
+  const preferred = ['name', 'party_name', 'entity_name', 'organization_name', 'company_name'];
+  return preferred.find((key) => headers.includes(key));
+}
+
+function lookupRow(row: Record<string, string>, aliases: string[]): string | undefined {
+  for (const alias of aliases) {
+    const value = row[alias]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
 /**
  * Open a source document as a stream of decoded text chunks: browser UA, retry
  * around the request, and the HTML-error-page guard applied to the head of the
@@ -160,12 +237,17 @@ function openSourceTextStream(
   signal: AbortSignal,
   source: string,
 ): Promise<AsyncIterable<string>> {
-  const reqCtx = requestContextService.createRequestContext({ operation: `harvest:${source}` });
+  const reqCtx = requestContextService.createRequestContext({
+    operation: `harvest:${source}`,
+  });
   return withRetry(
     async () => {
       const response = await fetchWithTimeout(url, HEADERS_TIMEOUT_MS, reqCtx, {
         signal,
-        headers: { 'User-Agent': BROWSER_UA, Accept: 'application/xml, text/xml, */*' },
+        headers: {
+          'User-Agent': BROWSER_UA,
+          Accept: 'application/xml, text/xml, */*',
+        },
         redirect: 'follow',
       });
       if (!response.body) {
@@ -185,7 +267,9 @@ function openSourceTextStream(
         else head += next.value;
       }
       if (/^\s*<(!DOCTYPE\s+html|html[\s>])/i.test(head)) {
-        throw serviceUnavailable(`${source} returned HTML instead of XML — likely rate-limited.`);
+        throw serviceUnavailable(
+          `${source} returned HTML instead of the expected source dataset — likely rate-limited.`,
+        );
       }
       return replayTextStream(head, iterator, drained);
     },
@@ -409,7 +493,11 @@ function buildStreamingIngester(spec: StreamingSourceSpec): SanctionsIngester {
     source: spec.source,
     url: spec.url,
     deferredFields: () => state.deferredFields,
-    report: () => ({ source: spec.source, accepted, rejected: state.rejections }),
+    report: () => ({
+      source: spec.source,
+      accepted,
+      rejected: state.rejections,
+    }),
     async *harvest(signal) {
       state = createHarvestState();
       accepted = 0;
@@ -518,14 +606,14 @@ export async function* streamOfacFromText(
       fragment.name === 'sdnEntry'
         ? parseOfacStandard(body, source, state.rejections)
         : parseOfacAdvanced(
-          body,
-          source,
-          refs,
-          EMPTY_PROGRAM_INDEX,
-          new Map(),
-          new Map(),
-          state.rejections,
-        );
+            body,
+            source,
+            refs,
+            EMPTY_PROGRAM_INDEX,
+            new Map(),
+            new Map(),
+            state.rejections,
+          );
     if (record) yield record;
   }
 }
@@ -596,6 +684,8 @@ interface OfacReferenceSets {
   aliasType: Map<string, string>;
   /** Country ID → label. */
   country: Map<string, string>;
+  /** DetailReference ID → label text (used by VersionDetail@DetailReferenceID). */
+  detailReference: Map<string, string>;
   /** FeatureType ID → label (8 = Birthdate, 9 = Place of Birth, …). */
   featureType: Map<string, string>;
   /** IDRegDocType ID → label (1626 = Vessel Registration Identification, …). */
@@ -613,6 +703,7 @@ function emptyOfacReferenceSets(): OfacReferenceSets {
   return {
     aliasType: new Map(),
     country: new Map(),
+    detailReference: new Map(),
     featureType: new Map(),
     idRegDocType: new Map(),
     locPartType: new Map(),
@@ -669,6 +760,14 @@ function buildOfacReferenceSets(sets: Record<string, unknown>): OfacReferenceSet
     const label = asText((c as Record<string, unknown>)['#text'] ?? c);
     if (id && label) country.set(id, label);
   }
+  const detailReference = new Map<string, string>();
+  for (const d of asArray(
+    (sets.DetailReferenceValues as Record<string, unknown> | undefined)?.DetailReference as unknown,
+  )) {
+    const id = asText((d as Record<string, unknown>)['@_ID']);
+    const label = asText((d as Record<string, unknown>)['#text'] ?? d);
+    if (id && label) detailReference.set(id, label);
+  }
   const subTypeToPartyType = new Map<string, string>();
   const subTypeLabel = new Map<string, string>();
   for (const s of asArray(
@@ -685,6 +784,7 @@ function buildOfacReferenceSets(sets: Record<string, unknown>): OfacReferenceSet
   return {
     aliasType,
     country,
+    detailReference,
     featureType,
     idRegDocType,
     locPartType,
@@ -1119,7 +1219,7 @@ function parseOfacAdvanced(
           .map((np) =>
             asText(
               ((np as Record<string, unknown>).NamePartValue as Record<string, unknown>)?.[
-              '#text'
+                '#text'
               ] ?? (np as Record<string, unknown>).NamePartValue,
             ),
           )
@@ -1150,6 +1250,7 @@ function parseOfacAdvanced(
     datesOfBirth,
     identifiers: featureIdentifiers,
     placesOfBirth,
+    vesselDetails,
   } = extractOfacFeatures(profile, refs);
   const identifiers = [...featureIdentifiers, ...(identifiersByProfile.get(id)?.identifiers ?? [])];
   const addresses = addressesByProfile.get(id)?.addresses ?? [];
@@ -1170,6 +1271,7 @@ function parseOfacAdvanced(
       datesOfBirth:
         datesOfBirth.length || placesOfBirth.length ? mergeDobPob(datesOfBirth, placesOfBirth) : [],
       nationalities: [],
+      ...(vesselDetails ? { vesselDetails } : {}),
     },
   };
 }
@@ -1204,34 +1306,100 @@ function mapOfacPartySubType(subTypeId: string | undefined, refs: OfacReferenceS
   return 'unknown';
 }
 
+/** Trim, dedupe, and omit an empty vessel-details block. */
+function compactVesselDetails(details: VesselDetails): VesselDetails | undefined {
+  const callSigns = [...new Set(details.callSigns.map((value) => value.trim()).filter(Boolean))];
+  const formerFlags = [
+    ...new Set(details.formerFlags.map((value) => value.trim()).filter(Boolean)),
+  ];
+  const flag = details.flag?.trim();
+  const vesselType = details.vesselType?.trim();
+  const tonnage = details.tonnage?.trim();
+  const grossRegisteredTonnage = details.grossRegisteredTonnage?.trim();
+  if (
+    !flag &&
+    !vesselType &&
+    !tonnage &&
+    !grossRegisteredTonnage &&
+    callSigns.length === 0 &&
+    formerFlags.length === 0
+  ) {
+    return;
+  }
+  return {
+    ...(flag ? { flag } : {}),
+    ...(vesselType ? { vesselType } : {}),
+    ...(tonnage ? { tonnage } : {}),
+    ...(grossRegisteredTonnage ? { grossRegisteredTonnage } : {}),
+    callSigns,
+    formerFlags,
+  };
+}
+
 /** Birthdate / place-of-birth / identifier values pulled from a profile's `<Feature>`s. */
 function extractOfacFeatures(
   profile: Record<string, unknown> | undefined,
   refs: OfacReferenceSets,
-): { datesOfBirth: string[]; identifiers: IdentifierRecord[]; placesOfBirth: string[] } {
+): {
+  datesOfBirth: string[];
+  identifiers: IdentifierRecord[];
+  placesOfBirth: string[];
+  vesselDetails?: VesselDetails;
+} {
   const datesOfBirth: string[] = [];
   const identifiers: IdentifierRecord[] = [];
   const placesOfBirth: string[] = [];
+  const vesselDetails: VesselDetails = {
+    callSigns: [],
+    formerFlags: [],
+  };
   for (const featRaw of asArray(profile?.Feature as unknown)) {
     const feat = featRaw as Record<string, unknown>;
     const label = refs.featureType.get(asText(feat['@_FeatureTypeID']) ?? '');
-    const normalizedLabel = label?.toLowerCase();
+    const normalizedLabel = label?.toLowerCase().replace(/\s+/g, ' ').trim();
     if (normalizedLabel === 'birthdate') {
       const date = ofacFeatureDate(feat);
       if (date) datesOfBirth.push(date);
     } else if (normalizedLabel === 'place of birth') {
       const place = asText(ofacFeatureVersions(feat)[0]?.VersionLocation);
       // Place often lives as free text in the VersionDetail; capture what's there.
-      const detail = ofacFeatureDetail(feat);
+      const detail = ofacFeatureDetail(feat, refs);
       const pob = detail ?? place;
       if (pob) placesOfBirth.push(pob);
+    } else if (normalizedLabel?.includes('former vessel flag')) {
+      vesselDetails.formerFlags.push(...ofacFeatureDetails(feat, refs));
+    } else if (normalizedLabel?.includes('vessel flag')) {
+      const flag = ofacFeatureDetail(feat, refs);
+      if (!vesselDetails.flag && flag) vesselDetails.flag = flag;
+    } else if (normalizedLabel?.includes('vessel type')) {
+      const vesselType = ofacFeatureDetail(feat, refs);
+      if (!vesselDetails.vesselType && vesselType) vesselDetails.vesselType = vesselType;
+    } else if (normalizedLabel?.includes('call sign')) {
+      vesselDetails.callSigns.push(...ofacFeatureDetails(feat, refs));
+    } else if (
+      normalizedLabel?.includes('gross registered tonnage') ||
+      normalizedLabel?.includes('grt')
+    ) {
+      const grossRegisteredTonnage = ofacFeatureDetail(feat, refs);
+      if (!vesselDetails.grossRegisteredTonnage && grossRegisteredTonnage) {
+        vesselDetails.grossRegisteredTonnage = grossRegisteredTonnage;
+      }
+    } else if (normalizedLabel?.includes('tonnage')) {
+      const tonnage = ofacFeatureDetail(feat, refs);
+      if (!vesselDetails.tonnage && tonnage) vesselDetails.tonnage = tonnage;
     } else if (label && isOfacIdentifierFeature(label)) {
-      for (const detail of ofacFeatureDetails(feat)) {
+      for (const detail of ofacFeatureDetails(feat, refs)) {
         identifiers.push({ type: label, value: detail });
       }
     }
   }
-  return { datesOfBirth, identifiers, placesOfBirth };
+  const compactedVesselDetails = compactVesselDetails(vesselDetails);
+  return {
+    datesOfBirth,
+    identifiers,
+    placesOfBirth,
+    ...(compactedVesselDetails ? { vesselDetails: compactedVesselDetails } : {}),
+  };
 }
 
 /** OFAC feature versions can be a single object or an array-of-one/many. */
@@ -1242,19 +1410,30 @@ function ofacFeatureVersions(feat: Record<string, unknown>): Record<string, unkn
 }
 
 /** Pull all free-text details published under a feature's versions. */
-function ofacFeatureDetails(feat: Record<string, unknown>): string[] {
+function ofacFeatureDetails(feat: Record<string, unknown>, refs: OfacReferenceSets): string[] {
   return ofacFeatureVersions(feat)
-    .map((version) =>
-      asText(
-        (version.VersionDetail as Record<string, unknown>)?.['#text'] ?? version.VersionDetail,
-      ),
-    )
+    .map((version) => ofacVersionDetailText(version, refs))
     .filter((detail): detail is string => Boolean(detail));
 }
 
 /** Pull the first free-text feature detail, for singleton feature types. */
-function ofacFeatureDetail(feat: Record<string, unknown>): string | undefined {
-  return ofacFeatureDetails(feat)[0];
+function ofacFeatureDetail(
+  feat: Record<string, unknown>,
+  refs: OfacReferenceSets,
+): string | undefined {
+  return ofacFeatureDetails(feat, refs)[0];
+}
+
+/** Resolve one FeatureVersion detail text, including DetailReferenceID lookups. */
+function ofacVersionDetailText(
+  version: Record<string, unknown>,
+  refs: OfacReferenceSets,
+): string | undefined {
+  const raw = (version.VersionDetail ?? {}) as Record<string, unknown>;
+  const direct = asText(raw['#text'] ?? version.VersionDetail);
+  if (direct) return direct;
+  const refId = asText(raw['@_DetailReferenceID']);
+  return refId ? refs.detailReference.get(refId) : undefined;
 }
 
 /** Feature labels that OFAC renders in the Details.aspx ID table. */
@@ -1277,7 +1456,10 @@ function mergeDobPob(dates: string[], places: string[]): DobRecord[] {
   const len = Math.max(dates.length, places.length);
   const out: DobRecord[] = [];
   for (let i = 0; i < len; i++) {
-    out.push({ ...opt('date', dates[i]), ...opt('place', places[i]) } as DobRecord);
+    out.push({
+      ...opt('date', dates[i]),
+      ...opt('place', places[i]),
+    } as DobRecord);
   }
   return out.filter((d) => d.date || d.place);
 }
@@ -1435,9 +1617,9 @@ export function parseUk(
   const list = designations.length
     ? designations
     : asArray(
-      ((doc as Record<string, unknown>).Designations as Record<string, unknown> | undefined)
-        ?.Designation as unknown,
-    );
+        ((doc as Record<string, unknown>).Designations as Record<string, unknown> | undefined)
+          ?.Designation as unknown,
+      );
   return list
     .map((raw) => parseUkDesignation(raw as Record<string, unknown>, rejections))
     .filter(Boolean) as NormalizedDesignation[];
@@ -1640,12 +1822,187 @@ function parseUnEntry(
   };
 }
 
+// ─── US BIS CSV sources (Entity / DPL / Unverified) ────────────────────────────
+
+function mapBisEntityType(value: string | undefined): EntityType {
+  const v = value?.toLowerCase() ?? '';
+  if (v.includes('person') || v.includes('individual')) return 'person';
+  if (v.includes('vessel') || v.includes('ship')) return 'vessel';
+  if (v.includes('aircraft') || v.includes('plane')) return 'aircraft';
+  if (v.includes('entity') || v.includes('company') || v.includes('organization')) {
+    return 'organization';
+  }
+  return 'unknown';
+}
+
+function mapBisProgram(source: BisSourceCode): string {
+  if (source === 'us_bis_entity') return 'US-BIS-ENTITY-LIST';
+  if (source === 'us_bis_dpl') return 'US-BIS-DENIED-PERSONS-LIST';
+  return 'US-BIS-UNVERIFIED-LIST';
+}
+
+function parseBisRow(
+  row: Record<string, string>,
+  source: BisSourceCode,
+  idKey: string,
+  nameKey: string,
+  rejections: IngestRejections,
+): NormalizedDesignation | null {
+  const sourceEntryId = row[idKey]?.trim();
+  if (!sourceEntryId) {
+    rejections.missingIdentifier += 1;
+    return null;
+  }
+
+  const primaryName = row[nameKey]?.trim();
+  if (!isUsableName(primaryName)) {
+    rejections.unusableName += 1;
+    return null;
+  }
+
+  const aliases = [
+    lookupRow(row, ['aka', 'alias', 'aliases', 'alternate_name', 'alternate_names']),
+    lookupRow(row, ['fka', 'former_name', 'previous_name']),
+  ]
+    .flatMap((value) => (value ? value.split(/[;|]/g).map((part) => part.trim()) : []))
+    .filter((value) => isUsableName(value))
+    .map(
+      (name): NameRecord => ({
+        name,
+        nameType: 'aka',
+      }),
+    );
+
+  const addressParts = [
+    lookupRow(row, ['address', 'street_address', 'address_1']),
+    lookupRow(row, ['city']),
+    lookupRow(row, ['state', 'province', 'region']),
+    lookupRow(row, ['postal_code', 'zip']),
+    lookupRow(row, ['country', 'country_name']),
+  ].filter((value): value is string => Boolean(value));
+
+  const identifiers: IdentifierRecord[] = [];
+  for (const [key, value] of Object.entries(row)) {
+    const trimmed = value.trim();
+    if (!trimmed || key === idKey || key === nameKey) continue;
+    if (!/(identifier|id|number|passport|registration|imo|license)/i.test(key)) continue;
+    identifiers.push({ type: key, value: trimmed });
+  }
+
+  const program =
+    lookupRow(row, ['program', 'regulation', 'rule', 'license_requirement']) ??
+    mapBisProgram(source);
+  const designationDate = lookupRow(row, [
+    'effective_date',
+    'listed_on',
+    'date_added',
+    'publication_date',
+  ]);
+
+  return {
+    id: `${source}:${sourceEntryId}`,
+    source,
+    sourceEntryId,
+    entityType: mapBisEntityType(lookupRow(row, ['entity_type', 'type', 'category'])),
+    primaryName,
+    ...opt('program', program),
+    ...opt('designationDate', designationDate),
+    payload: {
+      aliases,
+      identifiers,
+      addresses: addressParts.length
+        ? [
+            {
+              full: addressParts.join(', '),
+              ...opt('country', lookupRow(row, ['country'])),
+            },
+          ]
+        : [],
+      datesOfBirth: [],
+      nationalities: [],
+      ...opt('remarks', lookupRow(row, ['remarks', 'notes', 'comment'])),
+    },
+  };
+}
+
+/** Parse one BIS CSV payload into normalized designations. */
+export function parseBisCsv(
+  csv: string,
+  source: BisSourceCode,
+  rejections: IngestRejections = createRejections(),
+): NormalizedDesignation[] {
+  const lines = csv.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  if (lines.length === 0) return [];
+
+  const headerLine = lines[0];
+  if (!headerLine) return [];
+  const headerCells = parseCsvLine(headerLine).map(normalizeCsvHeader);
+  const idKey = bisIdColumn(headerCells);
+  const nameKey = bisNameColumn(headerCells);
+  if (!idKey || !nameKey) return [];
+
+  const out: NormalizedDesignation[] = [];
+  for (const line of lines.slice(1)) {
+    const values = parseCsvLine(line);
+    const row: Record<string, string> = {};
+    for (let i = 0; i < headerCells.length; i += 1) {
+      const key = headerCells[i];
+      if (!key) continue;
+      row[key] = values[i] ?? '';
+    }
+    const parsed = parseBisRow(row, source, idKey, nameKey, rejections);
+    if (parsed) out.push(parsed);
+  }
+
+  return out;
+}
+
+/** Stream normalized BIS records from a decoded CSV text stream. */
+export async function* streamBisCsvFromText(
+  textChunks: AsyncIterable<string>,
+  source: BisSourceCode,
+  state: HarvestState,
+): AsyncGenerator<NormalizedDesignation> {
+  let headers: string[] | undefined;
+  let idKey: string | undefined;
+  let nameKey: string | undefined;
+  for await (const line of splitLines(textChunks)) {
+    if (!line.trim()) continue;
+    if (!headers) {
+      headers = parseCsvLine(line).map(normalizeCsvHeader);
+      idKey = bisIdColumn(headers);
+      nameKey = bisNameColumn(headers);
+      continue;
+    }
+    if (!idKey || !nameKey) continue;
+
+    const values = parseCsvLine(line);
+    const row: Record<string, string> = {};
+    for (let i = 0; i < headers.length; i += 1) {
+      const key = headers[i];
+      if (!key) continue;
+      row[key] = values[i] ?? '';
+    }
+
+    const parsed = parseBisRow(row, source, idKey, nameKey, state.rejections);
+    if (parsed) yield parsed;
+  }
+}
+
+function buildBisIngester(source: BisSourceCode, url: string): SanctionsIngester {
+  return buildStreamingIngester({
+    source,
+    url: () => url,
+    stream: (text, state) => streamBisCsvFromText(text, source, state),
+  });
+}
+
 // ─── Registry + sync factory ─────────────────────────────────────────────────
 
 /** All sanctions ingesters, configured from the current server config. */
 export function buildSanctionsIngesters(): SanctionsIngester[] {
   const cfg = getServerConfig();
-  return [
+  const out: SanctionsIngester[] = [
     buildOfacIngester('ofac_sdn', () => cfg.ofacSdnUrl),
     buildOfacIngester('ofac_consolidated', () => cfg.ofacConsolidatedUrl),
     buildEuIngester(),
@@ -1655,6 +2012,10 @@ export function buildSanctionsIngesters(): SanctionsIngester[] {
     buildBisIngester('us_bis_dpl', () => cfg.bisDplUrl),
     buildBisIngester('us_bis_unverified', () => cfg.bisUnverifiedUrl),
   ];
+  if (cfg.bisEntityUrl) out.push(buildBisIngester('us_bis_entity', cfg.bisEntityUrl));
+  if (cfg.bisDplUrl) out.push(buildBisIngester('us_bis_dpl', cfg.bisDplUrl));
+  if (cfg.bisUnverifiedUrl) out.push(buildBisIngester('us_bis_unverified', cfg.bisUnverifiedUrl));
+  return out;
 }
 
 /** Wiring {@link createSanctionsSync} needs from the service that owns the mirror. */
@@ -1688,9 +2049,10 @@ export interface SanctionsSyncOptions {
  */
 export function createSanctionsSync(options: SanctionsSyncOptions) {
   const pageSize = options.pageSize ?? SYNC_PAGE_SIZE;
-  return async function* sync(ctx: {
-    signal: AbortSignal;
-  }): AsyncGenerator<{ checkpoint?: string; records: Record<string, string | number | null>[] }> {
+  return async function* sync(ctx: { signal: AbortSignal }): AsyncGenerator<{
+    checkpoint?: string;
+    records: Record<string, string | number | null>[];
+  }> {
     const ingesters = options.ingesters ?? buildSanctionsIngesters();
     const stamp = new Date().toISOString();
     for (const ingester of ingesters) {

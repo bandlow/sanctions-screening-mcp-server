@@ -25,11 +25,13 @@ import { createRejections } from '@/services/screening/ingest-validation.js';
 import {
   createHarvestState,
   type HarvestState,
+  parseBisCsv,
   parseEu,
   parseBisCsv,
   parseOfac,
   parseUk,
   parseUn,
+  streamBisCsvFromText,
   streamEuFromText,
   streamOfacFromText,
   streamUkFromText,
@@ -61,7 +63,15 @@ const OFAC_ADVANCED_XML = `<?xml version="1.0" encoding="utf-8"?>
       <FeatureType ID="8">Birthdate</FeatureType>
       <FeatureType ID="9">Place of Birth</FeatureType>
       <FeatureType ID="25">Location</FeatureType>
+      <FeatureType ID="30">Call Sign</FeatureType>
+      <FeatureType ID="31">Vessel Flag</FeatureType>
+      <FeatureType ID="32">Former Vessel Flag</FeatureType>
+      <FeatureType ID="33">Tonnage</FeatureType>
+      <FeatureType ID="34">Vessel Type</FeatureType>
     </FeatureTypeValues>
+    <DetailReferenceValues>
+      <DetailReference ID="90001">Crude Oil Tanker</DetailReference>
+    </DetailReferenceValues>
     <LocPartTypeValues>
       <LocPartType ID="1451">ADDRESS1</LocPartType>
       <LocPartType ID="1454">CITY</LocPartType>
@@ -116,6 +126,21 @@ const OFAC_ADVANCED_XML = `<?xml version="1.0" encoding="utf-8"?>
         </Identity>
         <Feature FeatureTypeID="25">
           <FeatureVersion ID="282150"><VersionLocation LocationID="82150" /></FeatureVersion>
+        </Feature>
+        <Feature FeatureTypeID="30">
+          <FeatureVersion ID="282151"><VersionDetail>9HEG9</VersionDetail></FeatureVersion>
+        </Feature>
+        <Feature FeatureTypeID="31">
+          <FeatureVersion ID="282152"><VersionDetail>Iran</VersionDetail></FeatureVersion>
+        </Feature>
+        <Feature FeatureTypeID="32">
+          <FeatureVersion ID="282153"><VersionDetail>Malta</VersionDetail></FeatureVersion>
+        </Feature>
+        <Feature FeatureTypeID="33">
+          <FeatureVersion ID="282154"><VersionDetail>297013</VersionDetail></FeatureVersion>
+        </Feature>
+        <Feature FeatureTypeID="34">
+          <FeatureVersion ID="282155"><VersionDetail DetailReferenceID="90001" /></FeatureVersion>
         </Feature>
       </Profile>
     </DistinctParty>
@@ -187,6 +212,13 @@ describe('OFAC advanced parser', () => {
         country: 'Russia',
       },
     ]);
+    expect(vessel?.payload.vesselDetails).toEqual({
+      callSigns: ['9HEG9'],
+      flag: 'Iran',
+      formerFlags: ['Malta'],
+      tonnage: '297013',
+      vesselType: 'Crude Oil Tanker',
+    });
   });
 
   it('drops attributes (and so finds nothing) under the framework default parser', () => {
@@ -1114,7 +1146,10 @@ describe('GLEIF namespace-prefixed corpus (issue #7)', () => {
     // reads reach nothing and the record lists come back empty — exactly the bug
     // that `removeNSPrefix` fixes.
     const { XMLParser } = require('fast-xml-parser');
-    const nsPreserved = new XMLParser({ ignoreAttributes: false, processEntities: false });
+    const nsPreserved = new XMLParser({
+      ignoreAttributes: false,
+      processEntities: false,
+    });
     expect(parseLeiLevel1(nsPreserved.parse(LEI_L1_FULLY_PREFIXED_XML))).toHaveLength(0);
     expect(parseLeiLevel2(nsPreserved.parse(RR_L2_FULLY_PREFIXED_XML))).toHaveLength(0);
   });

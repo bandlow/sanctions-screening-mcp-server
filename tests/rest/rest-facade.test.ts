@@ -1,66 +1,84 @@
 /**
- * @fileoverview REST facade integration coverage for compliance-case endpoints
- * and the lightweight worklist UI route.
+ * @fileoverview REST facade integration coverage for screening and discovery routes.
  * @module tests/rest/rest-facade.test
  */
 
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
-interface ComplianceCaseSummary {
-  caseId: string;
-  bpId: string;
-  status: "open" | "in_review" | "pending_approval" | "closed";
-  hitCount: number;
-}
-
-interface ComplianceCaseDecisionResponse {
-  caseId: string;
-  status: "open" | "in_review" | "pending_approval" | "closed";
-  decision: {
-    decision: "confirmed_match" | "false_positive" | "escalate";
-    decidedBy: string;
-    proposedBy: string;
-    approvedBy?: string;
-    approvalStatus: "not_required" | "pending" | "approved";
-  };
-}
+import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer, type Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { NormalizedDesignation } from '@/services/screening/types.js';
 
 const httpPort = 38010;
 const restBaseUrl = `http://127.0.0.1:${httpPort + 1}`;
 
+const REST_VESSEL_FIXTURE: NormalizedDesignation = {
+  id: 'ofac_sdn:FX-REST-VESSEL-1',
+  source: 'ofac_sdn',
+  sourceEntryId: 'FX-REST-VESSEL-1',
+  entityType: 'vessel',
+  primaryName: 'MV REST FACADE TEST',
+  program: 'TEST-VESSEL',
+  designationDate: '2026-09-07',
+  payload: {
+    aliases: [{ name: 'REST TEST SHIP', nameType: 'aka' }],
+    identifiers: [{ type: 'Vessel Registration Identification', value: 'IMO 9218478' }],
+    addresses: [],
+    datesOfBirth: [],
+    nationalities: [],
+    vesselDetails: {
+      flag: 'Iran',
+      formerFlags: ['Malta'],
+      vesselType: 'Crude Oil Tanker',
+      callSigns: ['9HEG9'],
+      tonnage: '297013',
+    },
+  },
+};
+
 let stopRestFacade: (() => Promise<void>) | undefined;
-let tempDir = "";
+let mcpProxyTarget: Server | undefined;
+let tempDir = '';
 let closeScreeningService: (() => Promise<void>) | undefined;
 let resetScreeningServiceFn: (() => void) | undefined;
 let resetServerConfigFn: (() => void) | undefined;
 
 beforeAll(async () => {
-  process.env.MCP_TRANSPORT_TYPE = "http";
-  process.env.MCP_HTTP_HOST = "127.0.0.1";
+  process.env.MCP_TRANSPORT_TYPE = 'http';
+  process.env.MCP_HTTP_HOST = '127.0.0.1';
   process.env.MCP_HTTP_PORT = String(httpPort);
-  tempDir = mkdtempSync(join(tmpdir(), "sanctions-rest-test-"));
-  process.env.SANCTIONS_MIRROR_PATH = join(tempDir, "test.db");
+  mcpProxyTarget = createServer((req, res) => {
+    if (req.url === '/mcp') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ proxied: true }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise<void>((resolve) =>
+    mcpProxyTarget?.listen(httpPort, '127.0.0.1', resolve),
+  );
+  tempDir = mkdtempSync(join(tmpdir(), 'sanctions-rest-test-'));
+  process.env.SANCTIONS_MIRROR_PATH = join(tempDir, 'test.db');
 
   vi.resetModules();
 
-  const { resetServerConfig } = await import("@/config/server-config.js");
-  const { getScreeningService, initScreeningService, resetScreeningService } =
-    await import("@/services/screening/screening-service.js");
-  const {
-    FIXTURE_DESIGNATIONS,
-    FIXTURE_LEI_ENTITIES,
-    FIXTURE_LEI_RELATIONSHIPS,
-  } = await import("@/services/screening/fixtures.js");
+  const { resetServerConfig } = await import('@/config/server-config.js');
+  const { getScreeningService, initScreeningService, resetScreeningService } = await import(
+    '@/services/screening/screening-service.js'
+  );
+  const { FIXTURE_DESIGNATIONS, FIXTURE_LEI_ENTITIES, FIXTURE_LEI_RELATIONSHIPS } = await import(
+    '@/services/screening/fixtures.js'
+  );
 
   resetServerConfig();
   resetScreeningService();
   initScreeningService();
   const service = getScreeningService();
   await service.seedFixtures({
-    designations: FIXTURE_DESIGNATIONS,
+    designations: [...FIXTURE_DESIGNATIONS, REST_VESSEL_FIXTURE],
     leiEntities: FIXTURE_LEI_ENTITIES,
     leiRelationships: FIXTURE_LEI_RELATIONSHIPS,
   });
@@ -69,17 +87,25 @@ beforeAll(async () => {
   resetScreeningServiceFn = resetScreeningService;
   resetServerConfigFn = resetServerConfig;
 
-  const rest = await import("@/rest/rest-facade.js");
+  const rest = await import('@/rest/rest-facade.js');
   stopRestFacade = rest.stopRestFacade;
   await rest.startRestFacade();
 }, 30_000);
 
 afterAll(async () => {
   await stopRestFacade?.();
+  await new Promise<void>((resolve, reject) => {
+    mcpProxyTarget?.close((error) => (error ? reject(error) : resolve()));
+  });
   await closeScreeningService?.();
   resetScreeningServiceFn?.();
   try {
-    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(tempDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 50,
+    });
   } catch {
     // Windows can transiently hold SQLite files; cleanup failures are non-fatal.
   }
@@ -87,176 +113,184 @@ afterAll(async () => {
   delete process.env.MCP_TRANSPORT_TYPE;
   delete process.env.MCP_HTTP_HOST;
   delete process.env.MCP_HTTP_PORT;
+  delete process.env.REST_HTTP_PORT;
+  delete process.env.REST_MCP_PROXY_HOST;
   delete process.env.SANCTIONS_MIRROR_PATH;
   resetServerConfigFn?.();
 
   vi.resetModules();
 });
 
-describe("REST facade compliance-case endpoints", () => {
-  it("serves the compliance worklist UI route", async () => {
-    const response = await fetch(`${restBaseUrl}/ui/compliance-cases`);
-    const body = await response.text();
+describe('REST facade compliance-case endpoints', () => {
+  it('returns designation details including vessel metadata via REST', async () => {
+    const response = await fetch(`${restBaseUrl}/api/v1/designations/ofac_sdn/FX-REST-VESSEL-1`);
+    const payload = (await response.json()) as {
+      designation: {
+        source: string;
+        sourceEntryId: string;
+        entityType: string;
+        vesselDetails?: {
+          flag?: string;
+          formerFlags: string[];
+          vesselType?: string;
+          callSigns: string[];
+          tonnage?: string;
+        };
+      };
+    };
 
     expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain("text/html");
-    expect(body).toContain("Compliance Case Worklist");
-  });
-
-  it("creates a case from screening hits and exposes it via list/detail APIs", async () => {
-    const screeningResponse = await fetch(
-      `${restBaseUrl}/api/v1/screening/business-partner`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          bpId: "BP-CASE-1001",
-          name: "Ivan Testovich Volkov",
-          role: "vendor",
-          country: "DE",
-          matchMode: "strict",
-        }),
-      },
-    );
-
-    const screeningPayload = (await screeningResponse.json()) as {
-      caveat: string;
-      hits: unknown[];
-    };
-
-    expect(screeningResponse.status).toBe(200);
-    expect(screeningPayload.hits.length).toBeGreaterThan(0);
-    expect(screeningPayload.caveat).toContain("not a compliance determination");
-
-    const listResponse = await fetch(
-      `${restBaseUrl}/api/v1/compliance/cases?status=open`,
-    );
-    const listPayload = (await listResponse.json()) as {
-      cases: ComplianceCaseSummary[];
-    };
-
-    expect(listResponse.status).toBe(200);
-    const createdCase = listPayload.cases.find(
-      (item) => item.bpId === "BP-CASE-1001",
-    );
-    expect(createdCase).toBeDefined();
-    expect(createdCase?.status).toBe("open");
-    expect((createdCase?.hitCount ?? 0) > 0).toBe(true);
-
-    const detailResponse = await fetch(
-      `${restBaseUrl}/api/v1/compliance/cases/${createdCase?.caseId}`,
-    );
-    const detailPayload = (await detailResponse.json()) as {
-      case: {
-        caseId: string;
-        bpId: string;
-        status: string;
-        hits: Array<{ reviewStatus: string }>;
-      };
-    };
-
-    expect(detailResponse.status).toBe(200);
-    expect(detailPayload.case.bpId).toBe("BP-CASE-1001");
-    expect(detailPayload.case.hits.length).toBeGreaterThan(0);
-    expect(detailPayload.case.hits[0]?.reviewStatus).toBe("open");
-  });
-
-  it("enforces the four-eyes guardrail and accepts approved decisions", async () => {
-    await fetch(`${restBaseUrl}/api/v1/screening/business-partner`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        bpId: "BP-CASE-1002",
-        name: "Ivan Testovich Volkov",
-        matchMode: "strict",
-      }),
+    expect(payload.designation.source).toBe('ofac_sdn');
+    expect(payload.designation.sourceEntryId).toBe('FX-REST-VESSEL-1');
+    expect(payload.designation.entityType).toBe('vessel');
+    expect(payload.designation.vesselDetails).toEqual({
+      flag: 'Iran',
+      formerFlags: ['Malta'],
+      vesselType: 'Crude Oil Tanker',
+      callSigns: ['9HEG9'],
+      tonnage: '297013',
     });
-
-    const listResponse = await fetch(
-      `${restBaseUrl}/api/v1/compliance/cases?status=open`,
-    );
-    const listPayload = (await listResponse.json()) as {
-      cases: ComplianceCaseSummary[];
-    };
-    const targetCase = listPayload.cases.find(
-      (item) => item.bpId === "BP-CASE-1002",
-    );
-    expect(targetCase).toBeDefined();
-
-    const invalidDecisionResponse = await fetch(
-      `${restBaseUrl}/api/v1/compliance/cases/${targetCase?.caseId}/decision`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          decision: "confirmed_match",
-          decidedBy: "alice",
-          proposedBy: "alice",
-          approvedBy: "alice",
-        }),
-      },
-    );
-
-    const invalidDecisionPayload = (await invalidDecisionResponse.json()) as {
-      error: { code: string; message: string };
-    };
-
-    expect(invalidDecisionResponse.status).toBe(400);
-    expect(invalidDecisionPayload.error.code).toBe("validation_error");
-    expect(invalidDecisionPayload.error.message).toContain("Four-eyes rule");
-
-    const validDecisionResponse = await fetch(
-      `${restBaseUrl}/api/v1/compliance/cases/${targetCase?.caseId}/decision`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          decision: "confirmed_match",
-          decidedBy: "alice",
-          proposedBy: "alice",
-          approvedBy: "bob",
-          comment: "Potential true positive confirmed for review workflow.",
-        }),
-      },
-    );
-
-    const validDecisionPayload =
-      (await validDecisionResponse.json()) as ComplianceCaseDecisionResponse;
-
-    expect(validDecisionResponse.status).toBe(200);
-    expect(validDecisionPayload.status).toBe("closed");
-    expect(validDecisionPayload.decision.decision).toBe("confirmed_match");
-    expect(validDecisionPayload.decision.approvalStatus).toBe("approved");
-
-    const detailResponse = await fetch(
-      `${restBaseUrl}/api/v1/compliance/cases/${targetCase?.caseId}`,
-    );
-    const detailPayload = (await detailResponse.json()) as {
-      case: {
-        status: "open" | "in_review" | "pending_approval" | "closed";
-        hits: Array<{ reviewStatus: string }>;
-      };
-    };
-
-    expect(detailResponse.status).toBe(200);
-    expect(detailPayload.case.status).toBe("closed");
-    expect(
-      detailPayload.case.hits.every(
-        (hit) => hit.reviewStatus === "confirmed_match",
-      ),
-    ).toBe(true);
   });
 
-  it("returns validation_error for unknown case-status filters", async () => {
-    const response = await fetch(
-      `${restBaseUrl}/api/v1/compliance/cases?status=unknown-status`,
-    );
+  it('returns designation_not_found for unknown designation details', async () => {
+    const response = await fetch(`${restBaseUrl}/api/v1/designations/ofac_sdn/DOES-NOT-EXIST`);
     const payload = (await response.json()) as {
       error: { code: string; message: string };
     };
 
-    expect(response.status).toBe(400);
-    expect(payload.error.code).toBe("validation_error");
-    expect(payload.error.message).toContain("status");
+    expect(response.status).toBe(404);
+    expect(payload.error.code).toBe('designation_not_found');
   });
+
+  it('screens an IMO identifier and returns the matching vessel candidate', async () => {
+    for (const identifier of ['IMO9218478', 'IMO 9218478']) {
+      const response = await fetch(`${restBaseUrl}/api/v1/screening/identifier`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier, identifierType: 'IMO', entityType: 'vessel' }),
+      });
+      const payload = (await response.json()) as {
+        hits: Array<{
+          primaryName: string;
+          entityType: string;
+          matchType: string;
+          identifier: { value: string };
+        }>;
+        caveat: string;
+      };
+
+      expect(response.status).toBe(200);
+      expect(payload.hits).toHaveLength(1);
+      expect(payload.hits[0]?.primaryName).toBe('MV REST FACADE TEST');
+      expect(payload.hits[0]?.entityType).toBe('vessel');
+      expect(payload.hits[0]?.matchType).toBe('exact');
+      expect(payload.hits[0]?.identifier.value).toBe('IMO 9218478');
+      expect(payload.caveat).toContain('not a compliance determination');
+    }
+  });
+
+  it('includes aliases and identifiers on name-screening hits', async () => {
+    const response = await fetch(`${restBaseUrl}/api/v1/screening/business-partner`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'MV REST FACADE TEST', entityType: 'vessel' }),
+    });
+    const payload = (await response.json()) as {
+      hits: Array<{
+        aliases: Array<{ name: string; nameType: string }>;
+        identifiers: Array<{ type: string; value: string }>;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.hits[0]?.aliases).toEqual([{ name: 'REST TEST SHIP', nameType: 'aka' }]);
+    expect(payload.hits[0]?.identifiers).toEqual([
+      { type: 'Vessel Registration Identification', value: 'IMO 9218478' },
+    ]);
+  });
+
+  it('combines vessel name and IMO evidence on business-partner screening', async () => {
+    const response = await fetch(`${restBaseUrl}/api/v1/screening/business-partner`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'MV REST FACADE TEST',
+        entityType: 'vessel',
+        identifiers: [{ type: 'IMO', value: 'IMO9218478' }],
+      }),
+    });
+    const payload = (await response.json()) as {
+      hits: Array<{
+        identifierMatchType?: string;
+        matchEvidence?: string[];
+        identifiers: Array<{ value: string }>;
+      }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.hits).toHaveLength(1);
+    expect(payload.hits[0]?.identifierMatchType).toBe('exact');
+    expect(payload.hits[0]?.matchEvidence).toEqual([
+      'name_exact',
+      'identifier_exact',
+      'identifier_type_Vessel Registration Identification',
+    ]);
+    expect(payload.hits[0]?.identifiers[0]?.value).toBe('IMO 9218478');
+  });
+
+  it('screens a vessel by identifier only when name and identifier type are omitted', async () => {
+    const response = await fetch(`${restBaseUrl}/api/v1/screening/business-partner`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        entityType: 'vessel',
+        identifiers: [{ value: 'IMO9218478' }],
+      }),
+    });
+    const payload = (await response.json()) as {
+      hits: Array<{ primaryName: string; identifierMatchType: string }>;
+    };
+
+    expect(response.status).toBe(200);
+    expect(payload.hits).toHaveLength(1);
+    expect(payload.hits[0]?.primaryName).toBe('MV REST FACADE TEST');
+    expect(payload.hits[0]?.identifierMatchType).toBe('exact');
+  });
+
+  it('serves OpenAPI YAML and Swagger UI endpoints', async () => {
+    const specResponse = await fetch(`${restBaseUrl}/api/v1/openapi.yaml`);
+    const specBody = await specResponse.text();
+
+    expect(specResponse.status).toBe(200);
+    expect(specResponse.headers.get('content-type')).toContain('application/yaml');
+    expect(specBody).toContain('openapi: 3.1.0');
+    expect(specBody).toContain('/screening/business-partner');
+    expect(specBody).toContain('/designations/{source}/{entryId}');
+
+    const uiResponse = await fetch(`${restBaseUrl}/ui/swagger`);
+    const uiBody = await uiResponse.text();
+
+    expect(uiResponse.status).toBe(200);
+    expect(uiResponse.headers.get('content-type')).toContain('text/html');
+    expect(uiBody).toContain('SwaggerUIBundle');
+    expect(uiBody).toContain('/api/v1/openapi.yaml');
+    expect(uiBody).toContain('/ui/swagger-ui.css');
+    expect(uiBody).toContain('/ui/swagger-ui-bundle.js');
+
+    const cssResponse = await fetch(`${restBaseUrl}/ui/swagger-ui.css`);
+    expect(cssResponse.status).toBe(200);
+    expect(cssResponse.headers.get('content-type')).toContain('text/css');
+
+    const bundleResponse = await fetch(`${restBaseUrl}/ui/swagger-ui-bundle.js`);
+    expect(bundleResponse.status).toBe(200);
+    expect(bundleResponse.headers.get('content-type')).toContain('application/javascript');
+  });
+
+  it('proxies MCP requests through the public REST listener', async () => {
+    const response = await fetch(`${restBaseUrl}/mcp`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ proxied: true });
+  });
+
 });
