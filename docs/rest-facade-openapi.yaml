@@ -1,0 +1,1288 @@
+openapi: 3.1.0
+info:
+  title: sanctions-screening-mcp-server REST facade
+  version: 0.1.11
+  description: |
+    Stable REST facade for CAP screening calls over the existing screening
+    engine. Audit, cases, exceptions, approvals, SAP triggers, and batch
+    orchestration belong to the separate sanctions-audit-server project.
+    This facade exposes name screening and structured identifier screening.
+
+    Contract notes:
+    - Default server-side timeout target: 30000ms.
+    - X-Request-Id correlates one HTTP request with server logs.
+    - Idempotency-Key is reserved for retry correlation; the current facade
+      accepts the header but does not yet replay or deduplicate requests by it.
+    - Screening returns potential matches only, never a compliance decision.
+servers:
+  - url: http://localhost:3011/api/v1
+    description: Local development example when MCP_HTTP_PORT=3010
+
+tags:
+  - name: Screening
+  - name: Sources
+  - name: Designations
+
+paths:
+  /sources:
+    get:
+      tags: [Sources]
+      summary: List source readiness and provenance
+      operationId: listSources
+      x-implementation-status: implemented
+      responses:
+        "200":
+          description: Mirror readiness, freshness timestamps, and source details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SourcesResponse"
+
+  /designations/{source}/{entryId}:
+    get:
+      tags: [Designations]
+      summary: Fetch one designation record
+      operationId: getDesignationDetails
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/SourceCodePath"
+        - $ref: "#/components/parameters/EntryIdPath"
+      responses:
+        "200":
+          description: Designation details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DesignationDetailsResponse"
+        "404":
+          description: Designation not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /screening/business-partner:
+    post:
+      tags: [Screening]
+      summary: Screen one business partner name
+      description: Screening aid only; results are potential matches, not a compliance determination. This REST operation searches names. Use the MCP sanctions_search_identifier tool for published identifiers such as IMO numbers; dates of birth are currently returned as source detail, not accepted as a search filter.
+      operationId: screenBusinessPartner
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/XRequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BusinessPartnerScreenRequest"
+      responses:
+        "200":
+          description: Potential matches.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BusinessPartnerScreenResponse"
+        "400":
+          description: Invalid request payload.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Screening mirror is not ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /screening/identifier:
+    post:
+      tags: [Screening]
+      summary: Screen a published identifier
+      description: Screening aid only. Supports identifiers such as IMO numbers, passports, tax IDs, and registration numbers. Results are potential matches, not a compliance determination. Dates of birth are not search filters on this operation.
+      operationId: screenIdentifier
+      x-implementation-status: implemented
+      parameters:
+        - $ref: "#/components/parameters/XRequestId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IdentifierScreenRequest"
+      responses:
+        "200":
+          description: Potential identifier matches.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdentifierScreenResponse"
+        "400":
+          description: Invalid request payload.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Screening mirror is not ready.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  parameters:
+    XRequestId:
+      name: X-Request-Id
+      in: header
+      required: false
+      description: Optional correlation id for this HTTP request. If omitted, the server generates one for request-scoped logs.
+      schema:
+        type: string
+        minLength: 1
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Optional retry correlation key. Reserved by the contract; the current REST facade does not yet deduplicate or replay requests by this key.
+      schema:
+        type: string
+        minLength: 1
+    BpIdPath:
+      name: bpId
+      in: path
+      required: true
+      description: Business partner id in the caller source system.
+      schema:
+        type: string
+        minLength: 1
+    SourceCodePath:
+      name: source
+      in: path
+      required: true
+      description: Source-list code of the designation.
+      schema:
+        type: string
+        enum:
+          [
+            ofac_sdn,
+            ofac_consolidated,
+            eu,
+            uk,
+            un,
+            us_bis_entity,
+            us_bis_dpl,
+            us_bis_unverified,
+          ]
+    EntryIdPath:
+      name: entryId
+      in: path
+      required: true
+      description: Source-native designation entry id.
+      schema:
+        type: string
+        minLength: 1
+    CaseIdPath:
+      name: caseId
+      in: path
+      required: true
+      description: Compliance case identifier.
+      schema:
+        type: string
+        minLength: 1
+
+  schemas:
+    BusinessPartnerScreenRequest:
+      type: object
+      additionalProperties: false
+      required: []
+      anyOf:
+        - required: [name]
+        - required: [identifiers]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: Optional when identifiers are supplied.
+        identifiers:
+          type: array
+          minItems: 1
+          description: Optional structured identifiers screened in addition to the name.
+          items:
+            $ref: "#/components/schemas/PartnerIdentifier"
+        bpId:
+          type: string
+          minLength: 1
+        country:
+          type: string
+          minLength: 2
+          maxLength: 2
+        role:
+          type: string
+          enum: [customer, vendor, other]
+        entityType:
+          type: string
+          enum: [any, person, organization, vessel, aircraft]
+          default: any
+        matchMode:
+          type: string
+          enum: [strict, fuzzy]
+          default: strict
+        minScore:
+          type: number
+          minimum: 0
+          maximum: 1
+        sources:
+          type: array
+          items:
+            type: string
+            enum:
+              [
+                ofac_sdn,
+                ofac_consolidated,
+                eu,
+                uk,
+                un,
+                us_bis_entity,
+                us_bis_dpl,
+                us_bis_unverified,
+              ]
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 25
+        offset:
+          type: integer
+          minimum: 0
+          default: 0
+
+    IdentifierScreenRequest:
+      type: object
+      additionalProperties: false
+      required: [identifier]
+      properties:
+        identifier:
+          type: string
+          minLength: 1
+          description: Published identifier value, for example an IMO number.
+        identifierType:
+          type: string
+          minLength: 1
+          description: Optional identifier category filter, for example IMO or Passport.
+        entityType:
+          type: string
+          enum: [any, person, organization, vessel, aircraft]
+          default: any
+        sources:
+          type: array
+          items:
+            type: string
+            enum:
+              [
+                ofac_sdn,
+                ofac_consolidated,
+                eu,
+                uk,
+                un,
+                us_bis_entity,
+                us_bis_dpl,
+                us_bis_unverified,
+              ]
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 25
+        offset:
+          type: integer
+          minimum: 0
+          default: 0
+
+    IdentifierScreenResponse:
+      type: object
+      required: [identifier, normalizedQuery, pagination, hits, caveat]
+      properties:
+        identifier: { type: string }
+        normalizedQuery: { type: string }
+        identifierType: { type: string }
+        pagination:
+          type: object
+          required: [limit, offset, returned, totalAvailable, hasMore]
+          properties:
+            limit: { type: integer }
+            offset: { type: integer }
+            returned: { type: integer }
+            totalAvailable: { type: integer }
+            hasMore: { type: boolean }
+            nextOffset: { type: integer }
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/IdentifierHit"
+        notice: { type: string }
+        caveat: { type: string }
+
+    IdentifierHit:
+      type: object
+      required:
+        [
+          source,
+          sourceLabel,
+          sourceEntryId,
+          entityType,
+          primaryName,
+          identifier,
+          matchType,
+        ]
+      properties:
+        source: { type: string }
+        sourceLabel: { type: string }
+        sourceEntryId: { type: string }
+        entityType: { type: string }
+        primaryName: { type: string }
+        identifier:
+          type: object
+          required: [type, value]
+          properties:
+            type: { type: string }
+            value: { type: string }
+            country: { type: string }
+        aliases:
+          type: array
+          items:
+            $ref: "#/components/schemas/Alias"
+        identifiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Identifier"
+        matchType:
+          type: string
+          enum: [exact, contains]
+        program: { type: string }
+        designationDate:
+          type: string
+          format: date
+
+    BusinessPartnerScreenResponse:
+      type: object
+      required: [businessPartner, screening, pagination, hits, caveat]
+      properties:
+        businessPartner:
+          type: object
+          required: [name]
+          properties:
+            name: { type: string }
+            bpId: { type: string }
+            country: { type: string }
+            role: { type: string }
+        screening:
+          type: object
+          required:
+            [
+              normalizedQuery,
+              requestedMatchMode,
+              matchModeUsed,
+              entityType,
+              sources,
+            ]
+          properties:
+            normalizedQuery: { type: string }
+            requestedMatchMode: { type: string }
+            matchModeUsed: { type: string }
+            entityType: { type: string }
+            sources:
+              type: array
+              items: { type: string }
+            minScore: { type: number }
+            sourcesAsOf:
+              type: string
+              format: date-time
+        pagination:
+          type: object
+          required:
+            [
+              limit,
+              offset,
+              returned,
+              totalAvailable,
+              totalAvailableBasis,
+              hasMore,
+            ]
+          properties:
+            limit: { type: integer }
+            offset: { type: integer }
+            returned: { type: integer }
+            totalAvailable: { type: integer }
+            totalAvailableBasis: { type: string }
+            hasMore: { type: boolean }
+            nextOffset: { type: integer }
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScreeningHit"
+        notice:
+          type: string
+        caveat:
+          type: string
+          description: Screening aid caveat from the screening engine.
+
+    ScreeningHit:
+      type: object
+      required:
+        - source
+        - sourceLabel
+        - sourceEntryId
+        - entityType
+        - primaryName
+        - matchedName
+        - matchedNameType
+        - matchType
+      properties:
+        source: { type: string }
+        sourceLabel: { type: string }
+        sourceEntryId: { type: string }
+        entityType: { type: string }
+        primaryName: { type: string }
+        matchedName: { type: string }
+        matchedNameType: { type: string }
+        identifier:
+          $ref: "#/components/schemas/Identifier"
+        identifierMatchType:
+          type: string
+          enum: [exact, contains]
+        matchEvidence:
+          type: array
+          items: { type: string }
+        aliases:
+          type: array
+          items:
+            $ref: "#/components/schemas/Alias"
+        identifiers:
+          type: array
+          items:
+            $ref: "#/components/schemas/Identifier"
+        matchType:
+          type: string
+          enum: [exact, strong, approximate]
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+        queryTokenCoverage:
+          type: object
+          properties:
+            matched: { type: integer }
+            total: { type: integer }
+        program: { type: string }
+        designationDate:
+          type: string
+          format: date
+
+    Alias:
+      type: object
+      required: [name, nameType]
+      properties:
+        name: { type: string }
+        nameType:
+          type: string
+          enum: [primary, aka, fka, low-quality-aka]
+
+    Identifier:
+      type: object
+      required: [type, value]
+      properties:
+        type: { type: string }
+        value: { type: string }
+        country: { type: string }
+
+    PartnerIdentifier:
+      type: object
+      additionalProperties: false
+      required: [value]
+      properties:
+        type:
+          {
+            type: string,
+            minLength: 1,
+            description: Optional identifier category,
+          }
+        value: { type: string, minLength: 1 }
+
+    VesselDetails:
+      type: object
+      required: [callSigns, formerFlags]
+      properties:
+        flag: { type: string }
+        formerFlags:
+          type: array
+          items: { type: string }
+        vesselType: { type: string }
+        callSigns:
+          type: array
+          items: { type: string }
+        tonnage: { type: string }
+        grossRegisteredTonnage: { type: string }
+
+    DesignationDetails:
+      type: object
+      required:
+        - source
+        - sourceLabel
+        - sourceEntryId
+        - entityType
+        - primaryName
+        - aliases
+        - identifiers
+        - addresses
+        - datesOfBirth
+        - nationalities
+        - caveat
+      properties:
+        source:
+          type: string
+          enum:
+            [
+              ofac_sdn,
+              ofac_consolidated,
+              eu,
+              uk,
+              un,
+              us_bis_entity,
+              us_bis_dpl,
+              us_bis_unverified,
+            ]
+        sourceLabel: { type: string }
+        sourceEntryId: { type: string }
+        entityType:
+          type: string
+          enum: [person, organization, vessel, aircraft, unknown]
+        primaryName: { type: string }
+        program: { type: string }
+        legalBasis: { type: string }
+        designationDate:
+          type: string
+          format: date
+        aliases:
+          type: array
+          items:
+            type: object
+            required: [name, nameType]
+            properties:
+              name: { type: string }
+              nameType:
+                type: string
+                enum: [primary, aka, fka, low-quality-aka]
+        identifiers:
+          type: array
+          items:
+            type: object
+            required: [type, value]
+            properties:
+              type: { type: string }
+              value: { type: string }
+              country: { type: string }
+        addresses:
+          type: array
+          items:
+            type: object
+            required: [full]
+            properties:
+              full: { type: string }
+              country: { type: string }
+        datesOfBirth:
+          type: array
+          items:
+            type: object
+            properties:
+              date: { type: string }
+              place: { type: string }
+        nationalities:
+          type: array
+          items: { type: string }
+        vesselDetails:
+          $ref: "#/components/schemas/VesselDetails"
+        remarks: { type: string }
+        caveat: { type: string }
+
+    DesignationDetailsResponse:
+      type: object
+      required: [designation]
+      properties:
+        designation:
+          $ref: "#/components/schemas/DesignationDetails"
+
+    SourcesResponse:
+      type: object
+      required: [sanctionsReady, leiReady, sources]
+      properties:
+        sanctionsReady: { type: boolean }
+        sanctionsAsOf:
+          type: string
+          format: date-time
+        leiReady: { type: boolean }
+        leiAsOf:
+          type: string
+          format: date-time
+        sources:
+          type: array
+          items:
+            type: object
+            required: [code, label, recordCount, url, license]
+            properties:
+              code: { type: string }
+              label: { type: string }
+              recordCount: { type: integer }
+              url:
+                type: string
+                format: uri
+              license: { type: string }
+
+    BusinessPartnerHistoryResponse:
+      type: object
+      required: [bpId, pagination, events]
+      properties:
+        bpId: { type: string }
+        pagination:
+          type: object
+          required: [limit, offset, returned, totalAvailable, hasMore]
+          properties:
+            limit: { type: integer }
+            offset: { type: integer }
+            returned: { type: integer }
+            totalAvailable: { type: integer }
+            hasMore: { type: boolean }
+            nextOffset: { type: integer }
+        events:
+          type: array
+          items:
+            type: object
+            required:
+              - eventId
+              - bpId
+              - queryName
+              - matchMode
+              - matchModeUsed
+              - entityType
+              - sourcesQueried
+              - executedAt
+              - hitCount
+              - screeningStatus
+            properties:
+              eventId: { type: string }
+              bpId: { type: string }
+              queryName: { type: string }
+              executedAt:
+                type: string
+                format: date-time
+              matchMode: { type: string }
+              matchModeUsed: { type: string }
+              entityType: { type: string }
+              sourcesQueried:
+                type: array
+                items: { type: string }
+              sourcesAsOf:
+                type: string
+                format: date-time
+              hitCount: { type: integer }
+              screeningStatus:
+                type: string
+                enum: [screened, not_ready, error]
+
+    BatchScreenRequest:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            additionalProperties: false
+            required: [name]
+            properties:
+              bpId: { type: string }
+              name: { type: string }
+              country:
+                type: string
+                minLength: 2
+                maxLength: 2
+              role:
+                type: string
+                enum: [customer, vendor, other]
+        screening:
+          type: object
+          properties:
+            entityType:
+              type: string
+              enum: [any, person, organization, vessel, aircraft]
+              default: any
+            matchMode:
+              type: string
+              enum: [strict, fuzzy]
+              default: strict
+            minScore:
+              type: number
+              minimum: 0
+              maximum: 1
+            sources:
+              type: array
+              items:
+                type: string
+                enum:
+                  [
+                    ofac_sdn,
+                    ofac_consolidated,
+                    eu,
+                    uk,
+                    un,
+                    us_bis_entity,
+                    us_bis_dpl,
+                    us_bis_unverified,
+                  ]
+            limit:
+              type: integer
+              minimum: 1
+              maximum: 100
+              default: 25
+
+    BatchScreenAcceptedResponse:
+      type: object
+      required:
+        - batchId
+        - status
+        - acceptedAt
+        - acceptedCount
+        - processedCount
+        - failedCount
+        - note
+        - caveat
+      properties:
+        batchId: { type: string }
+        status:
+          type: string
+          enum: [accepted]
+        acceptedAt:
+          type: string
+          format: date-time
+        acceptedCount: { type: integer }
+        processedCount: { type: integer }
+        failedCount: { type: integer }
+        note: { type: string }
+        caveat: { type: string }
+
+    ExceptionListResponse:
+      type: object
+      required: [bpId, exceptions]
+      properties:
+        bpId: { type: string }
+        exceptions:
+          type: array
+          items:
+            type: object
+            required:
+              - exceptionId
+              - sourceEntryId
+              - justification
+              - status
+              - createdAt
+            properties:
+              exceptionId: { type: string }
+              sourceEntryId: { type: string }
+              justification: { type: string }
+              validFrom:
+                type: string
+                format: date
+              validUntil:
+                type: string
+                format: date
+              status: { type: string }
+              createdAt:
+                type: string
+                format: date-time
+
+    CreateExceptionRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceEntryId, justification]
+      properties:
+        sourceEntryId:
+          type: string
+          minLength: 1
+        justification:
+          type: string
+          minLength: 1
+        validFrom:
+          type: string
+          format: date
+        validUntil:
+          type: string
+          format: date
+
+    CreateExceptionResponse:
+      type: object
+      required: [bpId, exceptionId, status, exception]
+      properties:
+        bpId: { type: string }
+        exceptionId: { type: string }
+        status:
+          type: string
+          enum: [created]
+        exception:
+          type: object
+          required:
+            - exceptionId
+            - sourceEntryId
+            - justification
+            - status
+            - createdAt
+          properties:
+            exceptionId: { type: string }
+            sourceEntryId: { type: string }
+            justification: { type: string }
+            validFrom:
+              type: string
+              format: date
+            validUntil:
+              type: string
+              format: date
+            status:
+              type: string
+              enum: [active]
+            createdAt:
+              type: string
+              format: date-time
+
+    ComplianceCaseListResponse:
+      type: object
+      required: [pagination, cases]
+      properties:
+        pagination:
+          type: object
+          required: [limit, offset, returned, totalAvailable, hasMore]
+          properties:
+            limit: { type: integer }
+            offset: { type: integer }
+            returned: { type: integer }
+            totalAvailable: { type: integer }
+            hasMore: { type: boolean }
+            nextOffset: { type: integer }
+        cases:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComplianceCaseSummary"
+
+    ComplianceCaseSummary:
+      type: object
+      required:
+        - caseId
+        - bpId
+        - businessPartnerName
+        - status
+        - priority
+        - createdAt
+        - updatedAt
+        - latestEventId
+        - hitCount
+        - openHitCount
+      properties:
+        caseId: { type: string }
+        bpId: { type: string }
+        businessPartnerName: { type: string }
+        status:
+          type: string
+          enum: [open, in_review, pending_approval, closed]
+        priority:
+          type: string
+          enum: [low, medium, high]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        latestEventId: { type: string }
+        hitCount: { type: integer }
+        openHitCount: { type: integer }
+
+    ComplianceCaseResponse:
+      type: object
+      required: [case]
+      properties:
+        case:
+          $ref: "#/components/schemas/ComplianceCase"
+
+    ComplianceCase:
+      type: object
+      required:
+        - caseId
+        - bpId
+        - businessPartnerName
+        - status
+        - priority
+        - createdAt
+        - updatedAt
+        - latestEventId
+        - eventIds
+        - hits
+        - decisions
+      properties:
+        caseId: { type: string }
+        bpId: { type: string }
+        businessPartnerName: { type: string }
+        status:
+          type: string
+          enum: [open, in_review, pending_approval, closed]
+        priority:
+          type: string
+          enum: [low, medium, high]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        latestEventId: { type: string }
+        eventIds:
+          type: array
+          items: { type: string }
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComplianceCaseHit"
+        decisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComplianceCaseDecision"
+
+    ComplianceCaseHit:
+      type: object
+      required:
+        - hitId
+        - source
+        - sourceEntryId
+        - matchedName
+        - matchType
+        - reviewStatus
+      properties:
+        hitId: { type: string }
+        source: { type: string }
+        sourceEntryId: { type: string }
+        matchedName: { type: string }
+        matchType:
+          type: string
+          enum: [exact, strong, approximate]
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+        reviewStatus:
+          type: string
+          enum: [open, confirmed_match, false_positive, escalated]
+
+    ComplianceCaseDecision:
+      type: object
+      required:
+        - decisionId
+        - decision
+        - decidedBy
+        - proposedBy
+        - requiresFourEyes
+        - approvalStatus
+        - decidedAt
+      properties:
+        decisionId: { type: string }
+        decision:
+          type: string
+          enum: [confirmed_match, false_positive, escalate]
+        decidedBy: { type: string }
+        proposedBy: { type: string }
+        approvedBy: { type: string }
+        comment: { type: string }
+        requiresFourEyes: { type: boolean }
+        approvalStatus:
+          type: string
+          enum: [not_required, pending, approved]
+        decidedAt:
+          type: string
+          format: date-time
+
+    ComplianceCaseDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [decision, decidedBy]
+      properties:
+        decision:
+          type: string
+          enum: [confirmed_match, false_positive, escalate]
+        decidedBy:
+          type: string
+          minLength: 1
+        proposedBy:
+          type: string
+          minLength: 1
+        approvedBy:
+          type: string
+          minLength: 1
+        comment:
+          type: string
+          minLength: 1
+
+    ComplianceCaseDecisionResponse:
+      type: object
+      required: [caseId, status, decision, note]
+      properties:
+        caseId: { type: string }
+        status:
+          type: string
+          enum: [open, in_review, pending_approval, closed]
+        decision:
+          $ref: "#/components/schemas/ComplianceCaseDecision"
+        note:
+          type: string
+
+    SapBusinessPartner:
+      type: object
+      additionalProperties: false
+      required: [bpId, name]
+      properties:
+        bpId:
+          type: string
+          minLength: 1
+        name:
+          type: string
+          minLength: 1
+        country:
+          type: string
+          minLength: 2
+          maxLength: 2
+        role:
+          type: string
+          enum: [customer, vendor, other]
+
+    SapIntegrationScreeningOptions:
+      type: object
+      additionalProperties: false
+      properties:
+        entityType:
+          type: string
+          enum: [any, person, organization, vessel, aircraft]
+          default: any
+        matchMode:
+          type: string
+          enum: [strict, fuzzy]
+          default: strict
+        minScore:
+          type: number
+          minimum: 0
+          maximum: 1
+        sources:
+          type: array
+          items:
+            type: string
+            enum:
+              [
+                ofac_sdn,
+                ofac_consolidated,
+                eu,
+                uk,
+                un,
+                us_bis_entity,
+                us_bis_dpl,
+                us_bis_unverified,
+              ]
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 25
+
+    SapEccBusinessPartnerChangedRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceSystem, triggerType, businessPartner]
+      properties:
+        sourceSystem:
+          type: string
+          enum: [ecc]
+        triggerType:
+          type: string
+          enum: [badi, change_document, manual]
+        businessPartner:
+          $ref: "#/components/schemas/SapBusinessPartner"
+        screening:
+          $ref: "#/components/schemas/SapIntegrationScreeningOptions"
+        context:
+          type: object
+          additionalProperties: false
+          properties:
+            changeDocumentId:
+              type: string
+              minLength: 1
+            iflowMessageId:
+              type: string
+              minLength: 1
+
+    SapS4BusinessPartnerChangedRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceSystem, eventType, businessPartner]
+      properties:
+        sourceSystem:
+          type: string
+          enum: [s4hana]
+        eventType:
+          type: string
+          minLength: 1
+        eventId:
+          type: string
+          minLength: 1
+        businessPartner:
+          $ref: "#/components/schemas/SapBusinessPartner"
+        screening:
+          $ref: "#/components/schemas/SapIntegrationScreeningOptions"
+        context:
+          type: object
+          additionalProperties: false
+          properties:
+            communicationArrangement:
+              type: string
+              minLength: 1
+
+    SapBatchBusinessPartnersRequest:
+      type: object
+      additionalProperties: false
+      required: [sourceSystem, items]
+      properties:
+        sourceSystem:
+          type: string
+          enum: [ecc, s4hana]
+        triggeredBy:
+          type: string
+          minLength: 1
+        runId:
+          type: string
+          minLength: 1
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/SapBusinessPartner"
+        screening:
+          $ref: "#/components/schemas/SapIntegrationScreeningOptions"
+
+    SapRealtimeScreeningResponse:
+      type: object
+      required: [integration, result]
+      properties:
+        integration:
+          type: object
+          required: [sourceSystem, mode, receivedAt]
+          properties:
+            sourceSystem:
+              type: string
+              enum: [ecc, s4hana]
+            triggerType:
+              type: string
+            eventType:
+              type: string
+            eventId:
+              type: string
+            mode:
+              type: string
+              enum: [realtime]
+            receivedAt:
+              type: string
+              format: date-time
+            context:
+              type: object
+              additionalProperties: true
+        result:
+          $ref: "#/components/schemas/BusinessPartnerScreenResponse"
+
+    SapBatchAcceptedResponse:
+      type: object
+      required:
+        - integration
+        - batchId
+        - status
+        - acceptedAt
+        - acceptedCount
+        - processedCount
+        - failedCount
+        - failedItems
+        - note
+        - caveat
+      properties:
+        integration:
+          type: object
+          required: [sourceSystem, mode]
+          properties:
+            sourceSystem:
+              type: string
+              enum: [ecc, s4hana]
+            mode:
+              type: string
+              enum: [batch]
+            triggeredBy:
+              type: string
+        batchId:
+          type: string
+        status:
+          type: string
+          enum: [accepted]
+        acceptedAt:
+          type: string
+          format: date-time
+        acceptedCount:
+          type: integer
+        processedCount:
+          type: integer
+        failedCount:
+          type: integer
+        failedItems:
+          type: array
+          items:
+            type: object
+            required: [bpId, reason, code]
+            properties:
+              bpId:
+                type: string
+              reason:
+                type: string
+              code:
+                type: string
+        note:
+          type: string
+        caveat:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorObject"
+
+    ErrorObject:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - validation_error
+            - mirror_not_ready
+            - not_found
+            - internal_error
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        recovery:
+          type: string

@@ -42,6 +42,7 @@ afterAll(async () => {
 /** Minimal schema-valid input per tool, for the strict-root-input sweep. */
 const MINIMAL_INPUTS: Record<string, Record<string, unknown>> = {
   sanctions_screen_name: { name: 'Ivan Testovich Volkov' },
+  sanctions_search_identifier: { identifier: 'IMO 8909575' },
   sanctions_get_designation: { source: 'ofac_sdn', entryId: 'FX-1001' },
   sanctions_list_sources: {},
   sanctions_resolve_entity: { name: 'Fictional Trading Company LLC' },
@@ -118,7 +119,9 @@ toolContractSuite(resolveEntityTool, {
       name: 'ranks LEI candidates for a known legal name',
       input: { name: 'Fictional Trading Company LLC' },
       assert: (result) => {
-        const structured = result.structuredContent as { matches: { lei: string }[] };
+        const structured = result.structuredContent as {
+          matches: { lei: string }[];
+        };
         expect(structured.matches[0]?.lei).toBe(SUBSIDIARY_LEI);
       },
     },
@@ -153,7 +156,12 @@ toolContractSuite(traceOwnershipTool, {
   success: [
     {
       name: 'walks past the root and screens every node when asked',
-      input: { lei: SUBSIDIARY_LEI, direction: 'both', depth: 3, screenNodes: true },
+      input: {
+        lei: SUBSIDIARY_LEI,
+        direction: 'both',
+        depth: 3,
+        screenNodes: true,
+      },
       assert: (result) => {
         const structured = result.structuredContent as {
           edges: { childLei: string; parentLei: string }[];
@@ -169,7 +177,10 @@ toolContractSuite(traceOwnershipTool, {
         );
         expect(structured.nodes.find((node) => node.lei === PARENT_LEI)?.depth).toBe(1);
         expect(structured.edges).toContainEqual(
-          expect.objectContaining({ childLei: SUBSIDIARY_LEI, parentLei: PARENT_LEI }),
+          expect.objectContaining({
+            childLei: SUBSIDIARY_LEI,
+            parentLei: PARENT_LEI,
+          }),
         );
         // Per-node screening ran on the whole graph: the subsidiary is listed,
         // the parent is not, and neither absence is rendered as a clearance.
@@ -183,7 +194,10 @@ toolContractSuite(traceOwnershipTool, {
       name: 'stops at the root when depth 1 is requested in one direction only',
       input: { lei: PARENT_LEI, direction: 'parents', depth: 1 },
       assert: (result) => {
-        const structured = result.structuredContent as { edges: unknown[]; nodes: unknown[] };
+        const structured = result.structuredContent as {
+          edges: unknown[];
+          nodes: unknown[];
+        };
         expect(structured.nodes).toHaveLength(1);
         expect(structured.edges).toEqual([]);
       },
@@ -209,7 +223,9 @@ describe('strict root inputs', () => {
       } as never);
 
       expect(result.isError).toBe(true);
-      const envelope = result.structuredContent as { error: { code: number; message: string } };
+      const envelope = result.structuredContent as {
+        error: { code: number; message: string };
+      };
       expect(envelope.error.code).toBe(JsonRpcErrorCode.ValidationError);
       // Named, not silently stripped — the caller can see which key was wrong.
       expect(envelope.error.message).toContain('min_score');

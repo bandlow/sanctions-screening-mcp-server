@@ -19,6 +19,7 @@ import { getEntityTool } from '@/mcp-server/tools/definitions/get-entity.tool.js
 import { listSourcesTool } from '@/mcp-server/tools/definitions/list-sources.tool.js';
 import { resolveEntityTool } from '@/mcp-server/tools/definitions/resolve-entity.tool.js';
 import { screenNameTool } from '@/mcp-server/tools/definitions/screen-name.tool.js';
+import { searchIdentifierTool } from '@/mcp-server/tools/definitions/search-identifier.tool.js';
 import { traceOwnershipTool } from '@/mcp-server/tools/definitions/trace-ownership.tool.js';
 
 /** Parse a payload against the tool's declared output schema, then render it. */
@@ -155,6 +156,42 @@ describe('sanctions_get_designation format()', () => {
     }
     expect(text).not.toContain('Nationalities:');
     expect(text).not.toContain('Remarks:');
+    expect(text).toMatch(/not a compliance determination/i);
+  });
+});
+
+describe('sanctions_search_identifier format()', () => {
+  it('renders identifier matches with provenance and optional fields', () => {
+    const text = render(searchIdentifierTool, {
+      hits: [
+        {
+          source: 'ofac_sdn',
+          sourceLabel: 'OFAC Specially Designated Nationals',
+          sourceEntryId: '53822',
+          entityType: 'organization',
+          primaryName: 'Fortuna Limited Liability Company',
+          identifier: { type: 'Tax ID No.', value: '2502071778', country: 'Russia' },
+          matchType: 'exact',
+          program: 'DPRK3',
+          designationDate: '2026-08-27',
+        },
+      ],
+      caveat: SCREENING_CAVEAT,
+    });
+
+    expect(text).toContain('1 identifier match(es)');
+    expect(text).toContain('Fortuna Limited Liability Company — exact');
+    expect(text).toContain('**Identifier:** Tax ID No.: 2502071778 (Russia)');
+    expect(text).toContain('OFAC Specially Designated Nationals');
+    expect(text).toContain('Entry ID:** 53822');
+    expect(text).toContain('Program:** DPRK3');
+    expect(text).toContain('Designated:** 2026-08-27');
+    expect(text).toMatch(/not a compliance determination/i);
+  });
+
+  it('renders empty identifier matches as absence, never clearance', () => {
+    const text = render(searchIdentifierTool, { hits: [], caveat: SCREENING_CAVEAT });
+    expect(text).toContain('**No published identifier matches found.**');
     expect(text).toMatch(/not a compliance determination/i);
   });
 });

@@ -25,10 +25,13 @@ import { createRejections } from '@/services/screening/ingest-validation.js';
 import {
   createHarvestState,
   type HarvestState,
+  parseBisCsv,
   parseEu,
+  parseBisCsv,
   parseOfac,
   parseUk,
   parseUn,
+  streamBisCsvFromText,
   streamEuFromText,
   streamOfacFromText,
   streamUkFromText,
@@ -53,10 +56,31 @@ const OFAC_ADVANCED_XML = `<?xml version="1.0" encoding="utf-8"?>
       <AliasType ID="1401">F.K.A.</AliasType>
       <AliasType ID="1403">Name</AliasType>
     </AliasTypeValues>
+    <IDRegDocTypeValues>
+      <IDRegDocType ID="1626">Vessel Registration Identification</IDRegDocType>
+    </IDRegDocTypeValues>
     <FeatureTypeValues>
       <FeatureType ID="8">Birthdate</FeatureType>
       <FeatureType ID="9">Place of Birth</FeatureType>
+      <FeatureType ID="25">Location</FeatureType>
+      <FeatureType ID="30">Call Sign</FeatureType>
+      <FeatureType ID="31">Vessel Flag</FeatureType>
+      <FeatureType ID="32">Former Vessel Flag</FeatureType>
+      <FeatureType ID="33">Tonnage</FeatureType>
+      <FeatureType ID="34">Vessel Type</FeatureType>
     </FeatureTypeValues>
+    <DetailReferenceValues>
+      <DetailReference ID="90001">Crude Oil Tanker</DetailReference>
+    </DetailReferenceValues>
+    <LocPartTypeValues>
+      <LocPartType ID="1451">ADDRESS1</LocPartType>
+      <LocPartType ID="1454">CITY</LocPartType>
+      <LocPartType ID="1455">STATE/PROVINCE</LocPartType>
+      <LocPartType ID="1456">POSTAL CODE</LocPartType>
+    </LocPartTypeValues>
+    <CountryValues>
+      <Country ID="11171" ISO2="RU">Russia</Country>
+    </CountryValues>
     <PartySubTypeValues>
       <PartySubType ID="1" PartyTypeID="4">Vessel</PartySubType>
       <PartySubType ID="2" PartyTypeID="4">Aircraft</PartySubType>
@@ -100,9 +124,41 @@ const OFAC_ADVANCED_XML = `<?xml version="1.0" encoding="utf-8"?>
             </DocumentedName>
           </Alias>
         </Identity>
+        <Feature FeatureTypeID="25">
+          <FeatureVersion ID="282150"><VersionLocation LocationID="82150" /></FeatureVersion>
+        </Feature>
+        <Feature FeatureTypeID="30">
+          <FeatureVersion ID="282151"><VersionDetail>9HEG9</VersionDetail></FeatureVersion>
+        </Feature>
+        <Feature FeatureTypeID="31">
+          <FeatureVersion ID="282152"><VersionDetail>Iran</VersionDetail></FeatureVersion>
+        </Feature>
+        <Feature FeatureTypeID="32">
+          <FeatureVersion ID="282153"><VersionDetail>Malta</VersionDetail></FeatureVersion>
+        </Feature>
+        <Feature FeatureTypeID="33">
+          <FeatureVersion ID="282154"><VersionDetail>297013</VersionDetail></FeatureVersion>
+        </Feature>
+        <Feature FeatureTypeID="34">
+          <FeatureVersion ID="282155"><VersionDetail DetailReferenceID="90001" /></FeatureVersion>
+        </Feature>
       </Profile>
     </DistinctParty>
   </DistinctParties>
+  <Locations>
+    <Location ID="82150">
+      <LocationCountry CountryID="11171" />
+      <LocationPart LocPartTypeID="1451"><LocationPartValue><Value>Office 5, Dom 113/5, Vokzalnaya Street</Value></LocationPartValue></LocationPart>
+      <LocationPart LocPartTypeID="1454"><LocationPartValue><Value>Artyom</Value></LocationPartValue></LocationPart>
+      <LocationPart LocPartTypeID="1455"><LocationPartValue><Value>Primorsky Krai</Value></LocationPartValue></LocationPart>
+      <LocationPart LocPartTypeID="1456"><LocationPartValue><Value>692760</Value></LocationPartValue></LocationPart>
+    </Location>
+  </Locations>
+  <IDRegDocuments>
+    <IDRegDocument ID="11892" IDRegDocTypeID="1626" IdentityID="9001" ValidityID="1">
+      <IDRegistrationNo>IMO 8909575</IDRegistrationNo>
+    </IDRegDocument>
+  </IDRegDocuments>
   <SanctionsEntries>
     <SanctionsEntry ID="2674" ProfileID="2674" ListID="1550">
       <EntryEvent ID="1" EntryEventTypeID="1">
@@ -147,6 +203,22 @@ describe('OFAC advanced parser', () => {
     expect(vessel?.entityType).toBe('vessel'); // PartySubTypeID 1 → "Vessel"
     expect(vessel?.primaryName).toBe('MAR AZUL');
     expect(vessel?.program).toBe('CUBA');
+    expect(vessel?.payload.identifiers).toEqual([
+      { type: 'Vessel Registration Identification', value: 'IMO 8909575' },
+    ]);
+    expect(vessel?.payload.addresses).toEqual([
+      {
+        full: 'Office 5, Dom 113/5, Vokzalnaya Street, Artyom, Primorsky Krai, 692760, Russia',
+        country: 'Russia',
+      },
+    ]);
+    expect(vessel?.payload.vesselDetails).toEqual({
+      callSigns: ['9HEG9'],
+      flag: 'Iran',
+      formerFlags: ['Malta'],
+      tonnage: '297013',
+      vesselType: 'Crude Oil Tanker',
+    });
   });
 
   it('drops attributes (and so finds nothing) under the framework default parser', () => {
@@ -279,6 +351,42 @@ describe('UN parser', () => {
     const org = designations.find((d) => d.sourceEntryId === '6908100');
     expect(org?.entityType).toBe('organization');
     expect(org?.primaryName).toBe('EXAMPLE UN ENTITY');
+  });
+});
+
+describe('BIS CSV parser', () => {
+  it('normalizes Entity, DPL TXT, and UVL CSV shapes', () => {
+    const entity = parseBisCsv(
+      'Source List,Entity Number,Name,Address,City,Country,Effective Date\nEL,123,Entity One,"5, Main Street",Kabul,Afghanistan,11/21/2011',
+      'us_bis_entity',
+    )[0]!;
+    const dpl = parseBisCsv(
+      '"Name","Street_Address","City","State","Country","Effective_Date"\n"Denied Person","1, Main Street","Berlin","","DE","3/20/1992"',
+      'us_bis_dpl',
+    )[0]!;
+    const uvl = parseBisCsv(
+      'COUNTRY,NAME,ADDRESS\nArmenia,Unverified Company,"Komitas 26/114, Yerevan, Armenia"',
+      'us_bis_unverified',
+    )[0]!;
+
+    expect(entity).toMatchObject({
+      id: 'us_bis_entity:123:2',
+      sourceEntryId: '123:2',
+      primaryName: 'Entity One',
+      entityType: 'organization',
+      program: 'US-BIS-ENTITY-LIST',
+    });
+    expect(entity.payload.addresses[0]?.full).toContain('5, Main Street');
+    expect(dpl).toMatchObject({
+      source: 'us_bis_dpl',
+      primaryName: 'Denied Person',
+      program: 'US-BIS-DENIED-PERSONS-LIST',
+    });
+    expect(uvl).toMatchObject({
+      source: 'us_bis_unverified',
+      primaryName: 'Unverified Company',
+      program: 'US-BIS-UNVERIFIED-LIST',
+    });
   });
 });
 
@@ -1038,7 +1146,10 @@ describe('GLEIF namespace-prefixed corpus (issue #7)', () => {
     // reads reach nothing and the record lists come back empty — exactly the bug
     // that `removeNSPrefix` fixes.
     const { XMLParser } = require('fast-xml-parser');
-    const nsPreserved = new XMLParser({ ignoreAttributes: false, processEntities: false });
+    const nsPreserved = new XMLParser({
+      ignoreAttributes: false,
+      processEntities: false,
+    });
     expect(parseLeiLevel1(nsPreserved.parse(LEI_L1_FULLY_PREFIXED_XML))).toHaveLength(0);
     expect(parseLeiLevel2(nsPreserved.parse(RR_L2_FULLY_PREFIXED_XML))).toHaveLength(0);
   });

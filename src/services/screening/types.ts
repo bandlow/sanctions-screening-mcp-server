@@ -1,13 +1,21 @@
 /**
  * @fileoverview Common normalized schema for sanctions designations and GLEIF
  * legal-entity records, plus the matching-engine vocabulary. Every upstream
- * source (OFAC, EU, UK, UN, GLEIF) collapses onto these shapes so the matching
+ * source (OFAC, EU, UK, UN, BIS, GLEIF) collapses onto these shapes so the matching
  * engine and tools never see a source-specific structure.
  * @module services/screening/types
  */
 
 /** Source list codes — the value stored in `designation.source`. */
-export type SourceCode = 'ofac_sdn' | 'ofac_consolidated' | 'eu' | 'uk' | 'un';
+export type SourceCode =
+  | 'ofac_sdn'
+  | 'ofac_consolidated'
+  | 'eu'
+  | 'uk'
+  | 'un'
+  | 'us_bis_entity'
+  | 'us_bis_dpl'
+  | 'us_bis_unverified';
 
 /** All sanctions source codes, in display order. */
 export const SOURCE_CODES: readonly SourceCode[] = [
@@ -16,6 +24,9 @@ export const SOURCE_CODES: readonly SourceCode[] = [
   'eu',
   'uk',
   'un',
+  'us_bis_entity',
+  'us_bis_dpl',
+  'us_bis_unverified',
 ] as const;
 
 /** Human-facing label per source, used in provenance and `sanctions_list_sources`. */
@@ -25,6 +36,9 @@ export const SOURCE_LABELS: Record<SourceCode, string> = {
   eu: 'EU Consolidated Financial Sanctions List',
   uk: 'UK Sanctions List (FCDO)',
   un: 'UN Security Council Consolidated List',
+  us_bis_entity: 'US BIS Entity List',
+  us_bis_dpl: 'US BIS Denied Persons List',
+  us_bis_unverified: 'US BIS Unverified List (UVL)',
 };
 
 /** Coarse entity classification shared across all sources. */
@@ -67,6 +81,22 @@ export interface DobRecord {
   place?: string;
 }
 
+/** Vessel-specific designation details, when a source publishes them. */
+export interface VesselDetails {
+  /** Published call signs. */
+  callSigns: string[];
+  /** Current vessel flag, when published. */
+  flag?: string;
+  /** Historical vessel flags, when published. */
+  formerFlags: string[];
+  /** Gross registered tonnage, when published distinctly from tonnage. */
+  grossRegisteredTonnage?: string;
+  /** Tonnage as published. */
+  tonnage?: string;
+  /** Vessel type / class, when published. */
+  vesselType?: string;
+}
+
 /**
  * The full normalized record for one designation, stored as JSON in
  * `designation.payload` and surfaced by `sanctions_get_designation`.
@@ -79,6 +109,8 @@ export interface DesignationPayload {
   nationalities: string[];
   /** Free-form remarks/title published by the source, when present. */
   remarks?: string;
+  /** Vessel-only details such as flag or vessel type, when published. */
+  vesselDetails?: VesselDetails;
 }
 
 /**

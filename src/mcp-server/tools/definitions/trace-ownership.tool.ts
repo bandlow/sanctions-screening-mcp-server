@@ -71,11 +71,20 @@ async function traverse(
   rootLei: string,
   direction: 'parents' | 'children' | 'both',
   depth: number,
-): Promise<{ edges: GraphEdge[]; nodes: Map<string, GraphNode>; truncated: boolean }> {
+): Promise<{
+  edges: GraphEdge[];
+  nodes: Map<string, GraphNode>;
+  truncated: boolean;
+}> {
   const nodes = new Map<string, GraphNode>();
   const edges: GraphEdge[] = [];
   const seenEdges = new Set<string>();
-  nodes.set(rootLei, { lei: rootLei, legalName: rootLei, depth: 0, role: 'root' });
+  nodes.set(rootLei, {
+    lei: rootLei,
+    legalName: rootLei,
+    depth: 0,
+    role: 'root',
+  });
 
   let frontier = [rootLei];
   for (let level = 0; level < depth && frontier.length > 0; level++) {
@@ -97,7 +106,12 @@ async function traverse(
         const neighbor = rel.childLei === lei ? rel.parentLei : rel.childLei;
         const role: GraphNode['role'] = rel.childLei === lei ? 'parent' : 'child';
         if (!nodes.has(neighbor)) {
-          nodes.set(neighbor, { lei: neighbor, legalName: neighbor, depth: level + 1, role });
+          nodes.set(neighbor, {
+            lei: neighbor,
+            legalName: neighbor,
+            depth: level + 1,
+            role,
+          });
           next.push(neighbor);
         }
       }
@@ -120,7 +134,11 @@ export const traceOwnershipTool = tool('sanctions_trace_ownership', {
   title: 'sanctions-screening-mcp-server: trace ownership',
   description:
     'Trace the GLEIF Level 2 corporate-ownership graph for an LEI: direct and ultimate parents and/or children, traversed breadth-first to a bounded depth, with relationship type for each edge. Set screenNodes to also screen every entity in the graph against all loaded watchlists — beneficial-ownership screening that resolves "is anyone in this ownership chain sanctioned." Each per-node screen is a screening AID: hits are candidates to verify, and an empty result for a node is not a clearance of that node. The response says what it could not do: complete/truncated/missingEntityLeis report whether the graph is the full known picture, screeningStatus reports whether the cross-reference actually ran, and each screened node reports whether its own hit list was capped. Requires a valid 20-character LEI (use sanctions_resolve_entity to obtain one).',
-  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+  annotations: {
+    readOnlyHint: true,
+    idempotentHint: true,
+    openWorldHint: false,
+  },
   input: z.object({
     lei: z
       .string()
@@ -188,7 +206,10 @@ export const traceOwnershipTool = tool('sanctions_trace_ownership', {
                 z
                   .object({
                     source: z
-                      .enum(['ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un'])
+                      .enum([
+                        'ofac_sdn', 'ofac_consolidated', 'eu', 'uk', 'un',
+                        'us_bis_entity', 'us_bis_dpl', 'us_bis_unverified',
+                      ])
                       .describe('Watchlist the candidate is on.'),
                     sourceLabel: z.string().describe('Human-readable source list name.'),
                     sourceEntryId: z
@@ -363,23 +384,23 @@ export const traceOwnershipTool = tool('sanctions_trace_ownership', {
           role: node.role,
           ...(screen
             ? {
-                sanctionsScreen: {
-                  totalAvailable: screen.totalAvailable,
-                  totalAvailableBasis: screen.totalAvailableBasis,
-                  // The per-node screen never pages, so whatever the cap left
-                  // behind is everything past the hits returned here.
-                  hasMore: screen.hits.length < screen.totalAvailable,
-                },
-                sanctionsHits: screen.hits.map((h) => ({
-                  source: h.source,
-                  sourceLabel: SOURCE_LABELS[h.source],
-                  sourceEntryId: h.sourceEntryId,
-                  primaryName: h.primaryName,
-                  matchedName: h.matchedName,
-                  matchType: h.matchType,
-                  ...(h.score !== undefined ? { score: h.score } : {}),
-                })),
-              }
+              sanctionsScreen: {
+                totalAvailable: screen.totalAvailable,
+                totalAvailableBasis: screen.totalAvailableBasis,
+                // The per-node screen never pages, so whatever the cap left
+                // behind is everything past the hits returned here.
+                hasMore: screen.hits.length < screen.totalAvailable,
+              },
+              sanctionsHits: screen.hits.map((h) => ({
+                source: h.source,
+                sourceLabel: SOURCE_LABELS[h.source],
+                sourceEntryId: h.sourceEntryId,
+                primaryName: h.primaryName,
+                matchedName: h.matchedName,
+                matchType: h.matchType,
+                ...(h.score !== undefined ? { score: h.score } : {}),
+              })),
+            }
             : {}),
         };
       }),
@@ -445,10 +466,9 @@ export const traceOwnershipTool = tool('sanctions_trace_ownership', {
       if (node.sanctionsScreen) {
         const s = node.sanctionsScreen;
         lines.push(
-          `  - Screen coverage: showing ${node.sanctionsHits?.length ?? 0} of ${s.totalAvailable} potential match(es) (count basis: ${s.totalAvailableBasis}); more available: ${s.hasMore}${
-            s.hasMore
-              ? ` — screen "${node.legalName}" with sanctions_screen_name to page through the rest.`
-              : ''
+          `  - Screen coverage: showing ${node.sanctionsHits?.length ?? 0} of ${s.totalAvailable} potential match(es) (count basis: ${s.totalAvailableBasis}); more available: ${s.hasMore}${s.hasMore
+            ? ` — screen "${node.legalName}" with sanctions_screen_name to page through the rest.`
+            : ''
           }`,
         );
       }
