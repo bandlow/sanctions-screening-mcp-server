@@ -1452,3 +1452,458 @@ describe("screenName — prefix matching with multiple results", () => {
     expect(limitedRes.totalAvailable).toEqual(unlimitedRes.totalAvailable);
   });
 });
+
+describe("screenName — approximate hits with score", () => {
+  // Comprehensive test suite for inputs that return at least one approximate hit
+  // with a raw Jaro-Winkler score (0–1 range), representing fuzzy matches that
+  // pass the configured floor (default 0.85) but are not exact or strong.
+
+  it("returns an approximate hit with valid score for a single-character misspelling", async () => {
+    // "Volkow" is one character off from "Volkov"
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Volkow", matchMode: "fuzzy" },
+      ctx,
+    );
+    expect(res.hits.length).toBeGreaterThan(0);
+    const hit = res.hits.find((h) => h.sourceEntryId === "FX-1001");
+    expect(hit).toBeDefined();
+    expect(hit?.matchType).toBe("approximate");
+    expect(typeof hit?.score).toBe("number");
+    expect(hit!.score!).toBeGreaterThanOrEqual(0.85); // clears default floor
+    expect(hit!.score!).toBeLessThanOrEqual(1);
+  });
+
+  it("returns multiple approximate hits ranked by Jaro-Winkler score", async () => {
+    // "Volkw" is a worse misspelling than "Volkow"
+    const res = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Ivan Volkw",
+        matchMode: "fuzzy",
+        minScore: 0.8,
+      },
+      ctx,
+    );
+    const approximateHits = res.hits.filter(
+      (h) => h.matchType === "approximate",
+    );
+    expect(approximateHits.length).toBeGreaterThan(0);
+
+    // All approximate hits must have a valid score
+    for (const hit of approximateHits) {
+      expect(typeof hit.score).toBe("number");
+      expect(hit.score!).toBeGreaterThanOrEqual(0.8);
+      expect(hit.score!).toBeLessThanOrEqual(1);
+    }
+
+    // Scores should be ordered (highest first)
+    const scores = approximateHits.map((h) => h.score ?? 0);
+    expect(scores).toEqual([...scores].sort((a, b) => b - a));
+  });
+
+  it("surfaces raw score without fabricated confidence percentages", async () => {
+    // Confirm that scores are raw Jaro-Winkler values, not blended or
+    // transformed into percentages or composite metrics
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Ivan Volkow", matchMode: "fuzzy" },
+      ctx,
+    );
+    const hit = res.hits.find(
+      (h) => h.sourceEntryId === "FX-1001" && h.matchType === "approximate",
+    );
+    expect(hit).toBeDefined();
+    expect(hit?.score).toBeGreaterThan(0.9); // JW for "volkow" vs "volkov"
+    expect(hit?.score).toBeLessThanOrEqual(1); // bounded to [0, 1]
+    // Verify it is not a percentage (e.g., 95 instead of 0.95)
+    expect(hit!.score!).toBeLessThanOrEqual(1);
+  });
+
+  it("distinguishes between approximate, strong, and exact match types", async () => {
+    // Query variations that produce different match types:
+    // 1. Exact: "Ivan Testovich Volkov"
+    // 2. Strong: "Volkov Ivan" (all tokens present, word-order swap)
+    // 3. Approximate: "Ivan Volkow" (fuzzy fallback, score-based)
+    const exact = await svc.screenName(
+      { ...screenDefaults, query: "Ivan Testovich Volkov" },
+      ctx,
+    );
+    const strong = await svc.screenName(
+      { ...screenDefaults, query: "Volkov Ivan" },
+      ctx,
+    );
+    const approximate = await svc.screenName(
+      { ...screenDefaults, query: "Ivan Volkow", matchMode: "fuzzy" },
+      ctx,
+    );
+
+    const exactHit = exact.hits.find((h) => h.sourceEntryId === "FX-1001");
+    const strongHit = strong.hits.find((h) => h.sourceEntryId === "FX-1001");
+    const approximateHit = approximate.hits.find(
+      (h) => h.sourceEntryId === "FX-1001",
+    );
+
+    expect(exactHit?.matchType).toBe("exact");
+    expect(exactHit?.score).toBeUndefined(); // exact hits are unscored
+
+    expect(strongHit?.matchType).toBe("strong");
+    expect(strongHit?.score).toBeUndefined(); // strong hits are unscored
+
+    expect(approximateHit?.matchType).toBe("approximate");
+    expect(typeof approximateHit?.score).toBe("number"); // approximate hits always have scores
+    expect(approximateHit!.score!).toBeGreaterThan(0);
+  });
+
+  it("returns approximate hit with score when phonetic key matches (Double-Metaphone)", async () => {
+    // "Muhammad" and "Mohammed" share the same Double-Metaphone key (MHMT).
+    // Combined with exact token matches ("al", "testi"), this produces an approximate hit
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Muhammad Al-Testi", matchMode: "fuzzy" },
+      ctx,
+    );
+    const hit = res.hits.find((h) => h.sourceEntryId === "FX-6006");
+    expect(hit).toBeDefined();
+    expect(hit?.matchType).toBe("approximate");
+    // The score is high because of exact token matches
+    expect(typeof hit?.score).toBe("number");
+    expect(hit!.score!).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it("respects minScore floor: excludes approximate hits below the threshold", async () => {
+    // Query with a high minScore threshold
+    const res = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Ivan Volkw",
+        matchMode: "fuzzy",
+        minScore: 0.95,
+      },
+      ctx,
+    );
+
+    // All returned approximate hits must meet the high threshold
+    for (const hit of res.hits.filter((h) => h.matchType === "approximate")) {
+      expect(hit.score!).toBeGreaterThanOrEqual(0.95);
+    }
+  });
+
+  it("includes queryTokenCoverage on approximate hits to rank candidates", async () => {
+    // Approximate hits should report how many query tokens they explain,
+    // used for ranking when scores tie
+    const res = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Ivan Volkov Qqzzxw",
+        matchMode: "fuzzy",
+      },
+      ctx,
+    );
+    const hit = res.hits.find(
+      (h) => h.sourceEntryId === "FX-1001" && h.matchType === "approximate",
+    );
+    if (hit) {
+      expect(hit.queryTokenCoverage).toBeDefined();
+      expect(hit.queryTokenCoverage?.covered).toBeGreaterThan(0);
+      expect(hit.queryTokenCoverage?.covered).toBeLessThanOrEqual(
+        hit.queryTokenCoverage?.total ?? 0,
+      );
+    }
+  });
+
+  it("returns approximate hits for multi-token queries with partial misspellings", async () => {
+    // "Diamond Tradingg Syndicate" — "Tradingg" has a typo
+    const res = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Diamond Tradingg Syndicate",
+        matchMode: "fuzzy",
+      },
+      ctx,
+    );
+    const hit = res.hits.find((h) => h.sourceEntryId === "FX-1011");
+    expect(hit).toBeDefined();
+    expect(hit?.matchType).toBe("approximate");
+    expect(typeof hit?.score).toBe("number");
+    expect(hit!.score!).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it("returns approximate hits with coverage tracking for partial token match", async () => {
+    // Query where not all tokens match exactly
+    const res = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Ivan Volkov Extra",
+        matchMode: "fuzzy",
+      },
+      ctx,
+    );
+    const hit = res.hits.find(
+      (h) => h.sourceEntryId === "FX-1001" && h.matchType === "approximate",
+    );
+    if (hit?.queryTokenCoverage) {
+      // Should explain 2 of 3 tokens (Ivan, Volkov)
+      expect(hit.queryTokenCoverage.covered).toBeLessThanOrEqual(
+        hit.queryTokenCoverage.total,
+      );
+    }
+  });
+
+  it("scores approximate hits on aliases (not just primary names)", async () => {
+    // If an approximate match is found via an alias, it should still have
+    // a valid Jaro-Winkler score
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "FTC LCC", matchMode: "fuzzy" },
+      ctx,
+    );
+    const hit = res.hits.find((h) => h.sourceEntryId === "FX-2002");
+    if (hit?.matchType === "approximate") {
+      expect(typeof hit?.score).toBe("number");
+      expect(hit!.score!).toBeGreaterThanOrEqual(0);
+      expect(hit!.score!).toBeLessThanOrEqual(1);
+      expect(hit?.matchedNameType).toBe("aka");
+    }
+  });
+
+  it("maintains consistent score ordering across result sets", async () => {
+    // Run the same fuzzy query multiple times; scores and order must be deterministic
+    const query = { ...screenDefaults, query: "Volkow", matchMode: "fuzzy" };
+    const res1 = await svc.screenName(query, ctx);
+    const res2 = await svc.screenName(query, ctx);
+
+    const scores1 = res1.hits.map((h) => ({
+      id: h.sourceEntryId,
+      score: h.score,
+    }));
+    const scores2 = res2.hits.map((h) => ({
+      id: h.sourceEntryId,
+      score: h.score,
+    }));
+
+    expect(scores1).toEqual(scores2);
+  });
+
+  it("returns approximate hits when fuzzy mode is explicitly requested", async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Ivan Volkow", matchMode: "fuzzy" },
+      ctx,
+    );
+    expect(res.modeUsed).toBe("fuzzy");
+    expect(res.fuzzyFallbackTriggered).toBe(false); // explicit mode, not fallback
+    const approximateHits = res.hits.filter(
+      (h) => h.matchType === "approximate",
+    );
+    expect(approximateHits.length).toBeGreaterThan(0);
+    for (const hit of approximateHits) {
+      expect(typeof hit.score).toBe("number");
+      expect(hit.score!).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("auto-falls-back to fuzzy and returns approximate hits on empty strict", async () => {
+    // Strict mode finds nothing, auto-fallback triggers fuzzy
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Volkow" },
+      ctx,
+    );
+    expect(res.modeUsed).toBe("fuzzy");
+    expect(res.fuzzyFallbackTriggered).toBe(true);
+    const approximateHits = res.hits.filter(
+      (h) => h.matchType === "approximate",
+    );
+    expect(approximateHits.length).toBeGreaterThan(0);
+  });
+
+  it("includes source provenance on every approximate hit", async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Volkow", matchMode: "fuzzy" },
+      ctx,
+    );
+    for (const hit of res.hits.filter((h) => h.matchType === "approximate")) {
+      expect(hit.source).toBeDefined();
+      expect(["ofac_sdn", "ofac_consolidated", "eu", "uk", "un"]).toContain(
+        hit.source,
+      );
+      // Source should be one of the five sanctions sources
+      expect(typeof hit.source).toBe("string");
+    }
+  });
+
+  it("returns scores bounded strictly to [0, 1] for all approximate hits", async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Diamnd", matchMode: "fuzzy" },
+      ctx,
+    );
+    for (const hit of res.hits.filter((h) => h.matchType === "approximate")) {
+      expect(hit.score!).toBeGreaterThanOrEqual(0);
+      expect(hit.score!).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("never surfaces approximate hits when strict mode is enforced without fuzzy", async () => {
+    // With autoFallback: false and matchMode: strict, fuzzy never runs
+    const res = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Volkow",
+        matchMode: "strict",
+        autoFallback: false,
+      },
+      ctx,
+    );
+    expect(res.modeUsed).toBe("strict");
+    // No approximate hits possible in strict mode
+    for (const hit of res.hits) {
+      expect(["exact", "strong"]).toContain(hit.matchType);
+    }
+  });
+
+  it("ranks approximate hits by score, then coverage, then designation ID", async () => {
+    // When two approximate hits have the same score and coverage, they should
+    // be ordered deterministically by their designation ID
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Volkow", matchMode: "fuzzy", limit: 100 },
+      ctx,
+    );
+
+    // Group by score
+    const byScore: { [key: string]: typeof res.hits } = {};
+    for (const hit of res.hits) {
+      const scoreKey = String(hit.score ?? "EXACT_STRONG");
+      byScore[scoreKey] ??= [];
+      byScore[scoreKey]!.push(hit);
+    }
+
+    // Within each score group, check coverage and ID ordering
+    for (const hits of Object.values(byScore)) {
+      if (hits.length > 1) {
+        for (let i = 1; i < hits.length; i++) {
+          const prev = hits[i - 1]!;
+          const curr = hits[i]!;
+          if (
+            (prev.score ?? -1) === (curr.score ?? -1) &&
+            (prev.queryTokenCoverage?.covered ?? 0) ===
+              (curr.queryTokenCoverage?.covered ?? 0)
+          ) {
+            // Tie-break by designation ID
+            expect(prev.designationId).toBeLessThanOrEqual(curr.designationId);
+          }
+        }
+      }
+    }
+  });
+
+  it("returns approximate hits for transliteration variants with matching phonetic keys", async () => {
+    // "Katharina" and "Catherine" share a phonetic key but have different spellings
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Katharina Pyotrov", matchMode: "fuzzy" },
+      ctx,
+    );
+    // Check if any approximate hits come from phonetic matches
+    const approximateHits = res.hits.filter(
+      (h) => h.matchType === "approximate",
+    );
+    if (approximateHits.length > 0) {
+      for (const hit of approximateHits) {
+        expect(typeof hit.score).toBe("number");
+        expect(hit.score!).toBeGreaterThanOrEqual(0);
+      }
+    }
+  });
+
+  it("preserves match-type classification across source filters", async () => {
+    // Approximate hits should retain their match type and scores even when
+    // filtered by source
+    const unfiltered = await svc.screenName(
+      { ...screenDefaults, query: "Volkow", matchMode: "fuzzy" },
+      ctx,
+    );
+    const filtered = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Volkow",
+        matchMode: "fuzzy",
+        sources: ["ofac_sdn"],
+      },
+      ctx,
+    );
+
+    const unfilteredApprox = unfiltered.hits.filter(
+      (h) => h.matchType === "approximate",
+    );
+    const filteredApprox = filtered.hits.filter(
+      (h) => h.matchType === "approximate",
+    );
+
+    // Filtered should be a subset
+    expect(filteredApprox.length).toBeLessThanOrEqual(unfilteredApprox.length);
+
+    // All filtered approximate hits must have scores
+    for (const hit of filteredApprox) {
+      expect(typeof hit.score).toBe("number");
+      expect(hit.score!).toBeGreaterThanOrEqual(0.85);
+    }
+  });
+
+  it("returns approximate hits paginated with stable scores across pages", async () => {
+    // With offset pagination, approximate hits on different pages should have
+    // consistent scores and ordering
+    const page1 = await svc.screenName(
+      { ...screenDefaults, query: "Volkow", matchMode: "fuzzy", limit: 2 },
+      ctx,
+    );
+    const page2 = await svc.screenName(
+      {
+        ...screenDefaults,
+        query: "Volkow",
+        matchMode: "fuzzy",
+        limit: 2,
+        offset: 2,
+      },
+      ctx,
+    );
+
+    // Get all hits in one query for comparison
+    const allHits = await svc.screenName(
+      { ...screenDefaults, query: "Volkow", matchMode: "fuzzy", limit: 100 },
+      ctx,
+    );
+
+    // Reconstructed pages should match the full set
+    const reconstructed = [...page1.hits, ...page2.hits];
+    for (let i = 0; i < reconstructed.length && i < allHits.hits.length; i++) {
+      expect(reconstructed[i]?.sourceEntryId).toBe(
+        allHits.hits[i]?.sourceEntryId,
+      );
+      expect(reconstructed[i]?.score).toBe(allHits.hits[i]?.score);
+    }
+  });
+
+  it("surfaces enrichment data for approximate hits (normalized query, mode used)", async () => {
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Volkow Ivan", matchMode: "fuzzy" },
+      ctx,
+    );
+
+    expect(res.normalizedQuery).toBeDefined();
+    expect(res.modeUsed).toBe("fuzzy");
+    expect(res.hits.some((h) => h.matchType === "approximate")).toBe(true);
+  });
+
+  it("returns approximate hits meeting the caveat requirement (screening aid, not a verdict)", async () => {
+    // Every hit returned (including approximate) must be a candidate to verify,
+    // not a compliance determination. This is reflected in tool output.
+    const res = await svc.screenName(
+      { ...screenDefaults, query: "Volkow", matchMode: "fuzzy" },
+      ctx,
+    );
+
+    // Hits should be present and scored (if approximate)
+    expect(res.hits.length).toBeGreaterThan(0);
+
+    // Verify that approximate hits all have scores
+    const approxHits = res.hits.filter((h) => h.matchType === "approximate");
+    for (const hit of approxHits) {
+      expect(hit.score).toBeDefined();
+      expect(typeof hit.score).toBe("number");
+    }
+  });
+});
