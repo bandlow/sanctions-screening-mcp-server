@@ -64,7 +64,7 @@ COPY package.json bun.lock ./
 # runtime is lost. The OTEL step below carries the same flag — without it, that
 # install re-resolves the graph and pulls every optional peer back in.
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install --production --omit=peer --frozen-lockfile --ignore-scripts
+    bun install --production --omit=peer --ignore-scripts
 
 # Conditionally install OpenTelemetry optional peer dependencies (Tier 3).
 # These are not bundled by default to keep the base image lean. Enable at build time
