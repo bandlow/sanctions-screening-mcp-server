@@ -14,7 +14,7 @@ import {
   getEnrichment,
   runToolContract,
 } from "@cyanheads/mcp-ts-core/testing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { designationResource } from "@/mcp-server/resources/definitions/designation.resource.js";
 import { entityResource } from "@/mcp-server/resources/definitions/entity.resource.js";
 import { sourcesResource } from "@/mcp-server/resources/definitions/sources.resource.js";
@@ -41,10 +41,6 @@ function mockSystemTime(isoTimestamp: string): void {
   const fixedTime = new originalDate(isoTimestamp).valueOf();
   globalThis.Date = class extends originalDate {
     constructor(...args: ConstructorParameters<typeof Date>) {
-      if (args.length === 0) {
-        super(fixedTime);
-        return;
-      }
       super(...args);
     }
 
