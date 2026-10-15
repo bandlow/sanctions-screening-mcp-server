@@ -21,7 +21,7 @@ COPY package.json bun.lock ./
 # and the TypeScript build only needs the package's type declarations.
 # The BuildKit cache mount persists Bun's global package cache across builds.
 RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install --frozen-lockfile --ignore-scripts
+    bun install --ignore-scripts
 
 # Copy the rest of the source code
 COPY . .
