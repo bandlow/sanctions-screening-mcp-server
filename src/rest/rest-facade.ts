@@ -53,10 +53,6 @@ const SOURCE_ENUM = z.enum([
 
 const PartnerIdentifierSchema = z
   .object({
-    value: z
-      .string()
-      .min(1)
-      .describe('Published identifier value, such as an IMO or registration number.'),
     type: z
       .string()
       .min(1)
@@ -669,7 +665,11 @@ async function handleOpenApiYaml(res: ServerResponse): Promise<void> {
   });
 }
 
-function proxyMcpRequest(req: IncomingMessage, res: ServerResponse, url: URL): void {
+function proxyMcpRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): void {
   const serverConfig = getServerConfig();
   const upstream = httpRequest(
     {

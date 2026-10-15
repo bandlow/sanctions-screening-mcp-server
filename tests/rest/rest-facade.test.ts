@@ -7,7 +7,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { resetConfig as resetCoreConfig } from "@cyanheads/mcp-ts-core/config";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { NormalizedDesignation } from "@/services/screening/types.js";
 
 const httpPort = 38010;
@@ -65,7 +66,7 @@ beforeAll(async () => {
   tempDir = mkdtempSync(join(tmpdir(), "sanctions-rest-test-"));
   process.env.SANCTIONS_MIRROR_PATH = join(tempDir, "test.db");
 
-  vi.resetModules();
+  resetCoreConfig();
 
   const { resetServerConfig } = await import("@/config/server-config.js");
   const { getScreeningService, initScreeningService, resetScreeningService } =
@@ -120,8 +121,7 @@ afterAll(async () => {
   delete process.env.REST_MCP_PROXY_HOST;
   delete process.env.SANCTIONS_MIRROR_PATH;
   resetServerConfigFn?.();
-
-  vi.resetModules();
+  resetCoreConfig();
 });
 
 describe("REST facade compliance-case endpoints", () => {
